@@ -10,11 +10,28 @@ server <- function(input, output, session) {
   # ---- Shared session state ---------------------------------
   # Populated by mod_auth on successful login.
   session_rv <- reactiveValues(
-    token      = NULL,   # JWT access token
-    user_id    = NULL,   # UUID from Supabase auth.users
-    username   = NULL,
-    expires_at = NULL    # POSIXct; refreshed automatically
+    token         = NULL,   # JWT access token
+    user_id       = NULL,   # UUID from Supabase auth.users
+    username      = NULL,
+    expires_at    = NULL,   # POSIXct; refreshed automatically
+    refresh_token = NULL    # Supabase refresh token (Phase 2)
   )
+
+  # ---- Auto-refresh timer -----------------------------------
+  # Fires every 30 seconds.  refresh_if_needed() only actually
+  # contacts Supabase when the token is within 60 s of expiry,
+  # so this is inexpensive in the normal case.
+  .refresh_timer <- reactiveTimer(30000)
+
+  observe({
+    .refresh_timer()
+    isolate({
+      if (!is.null(session_rv$token)) {
+        refresh_if_needed(session_rv)
+        route_guard(session_rv)
+      }
+    })
+  })
 
   # ---- Page router ------------------------------------------
   # Renders the login page or the main app shell depending on

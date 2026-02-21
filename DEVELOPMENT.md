@@ -28,6 +28,9 @@ git merge phase-N-name --no-ff -m "Phase N: <name> — validation gate passed"
 From R console (NOT browser), run the following smoke tests:
 
 ```r
+## First make sure the packages are installed:
+install.packages(c("shiny","bslib","shinyjs","httr2","jsonlite,"stringr","stringdist","readr","data.table", "writexl","tools","testthat"))
+
 source("R/utils.R")
 source("R/supabase.R")
 readRenviron(".Renviron")
@@ -81,7 +84,7 @@ cat("Deleted OK\n")
 
 ---
 
-## Phase 2: Authentication
+## Phase 2: Authentication ✅ (current)
 
 **Branch:** `phase-2-auth`
 
@@ -93,7 +96,7 @@ cat("Deleted OK\n")
 **Validation Gate 2:**
 Open two browser tabs. Log in as User A in tab 1, User B in tab 2. Verify each sees only their own session. Log out User A; confirm tab 1 redirects to login while tab 2 remains active.
 
-**Status:** [ ] Not started
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
 
@@ -239,6 +242,7 @@ Reviewer JWT cannot access another project's articles directly (API returns 403)
 | Date | Issue / Decision | Resolution |
 |------|-----------------|------------|
 | 2026-02-21 | Phase 1 scaffold initialised | All stubs created; SQL ready to run |
+| 2026-02-21 | Phase 2 authentication implemented | `R/auth.R` refresh/guard fully implemented; `server.R` gains `refresh_token` field and 30 s auto-refresh timer |
 
 ---
 
