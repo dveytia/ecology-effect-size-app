@@ -4,6 +4,12 @@
 # Routes reactive events to the appropriate module server.
 # All persistent state lives in Supabase; session state lives
 # in the `session_rv` reactiveValues object below.
+#
+# Three-state page router (Phase 3):
+#   1. No token          → login / register page
+#   2. Token, no project → dashboard (My Projects)
+#   3. Token + project   → project home (tabs view)
+# ============================================================
 
 server <- function(input, output, session) {
 
@@ -15,6 +21,16 @@ server <- function(input, output, session) {
     username      = NULL,
     expires_at    = NULL,   # POSIXct; refreshed automatically
     refresh_token = NULL    # Supabase refresh token (Phase 2)
+  )
+
+  # ---- App navigation state --------------------------------
+  # Tracks which project (if any) is currently open.
+  # Set to a project UUID by mod_dashboard when the user clicks
+  # "Open"; cleared by mod_project_home when the user clicks
+  # "← Dashboard".
+  app_state <- reactiveValues(
+    current_project_id    = NULL,
+    current_project_title = NULL
   )
 
   # ---- Auto-refresh timer -----------------------------------
@@ -33,20 +49,26 @@ server <- function(input, output, session) {
     })
   })
 
-  # ---- Page router ------------------------------------------
-  # Renders the login page or the main app shell depending on
-  # whether the user has an active JWT session.
+  # ---- Three-state page router ------------------------------
   output$page_router <- renderUI({
     if (is.null(session_rv$token)) {
+      # State 1: not authenticated → login page
       mod_auth_ui("auth")
+    } else if (!is.null(app_state$current_project_id)) {
+      # State 3: inside a project → project home
+      mod_project_home_ui("project_home")
     } else {
+      # State 2: authenticated, no project open → dashboard
       tagList(
-        # Top navbar with project title and logout
         navbarPage(
-          title = "Ecology Effect Size Coder",
-          id    = "main_nav",
+          title       = "Ecology Effect Size Coder",
+          id          = "main_nav",
           collapsible = TRUE,
-          mod_dashboard_ui("dashboard")
+          nav_panel(
+            title = tagList(icon("home"), " Dashboard"),
+            value = "dashboard",
+            mod_dashboard_ui("dashboard")
+          )
         )
       )
     }
@@ -55,9 +77,21 @@ server <- function(input, output, session) {
   # ---- Module servers ---------------------------------------
   mod_auth_server("auth", session_rv = session_rv)
 
-  # Dashboard is only active once logged in
+  # Dashboard and project home are both initialised once after
+  # the first successful login.  They are kept alive for the
+  # duration of the session; the page router simply shows or
+  # hides their UI based on app_state$current_project_id.
   observeEvent(session_rv$token, {
     req(session_rv$token)
-    mod_dashboard_server("dashboard", session_rv = session_rv)
+
+    mod_dashboard_server("dashboard",
+                         session_rv = session_rv,
+                         app_state  = app_state)
+
+    mod_project_home_server("project_home",
+                            project_id = reactive(app_state$current_project_id),
+                            session_rv = session_rv,
+                            app_state  = app_state)
   }, once = TRUE)
 }
+

@@ -128,6 +128,22 @@ sb_delete <- function(table, id_col, id_val, token = NULL) {
   .sb_parse(resp)
 }
 
+#' DELETE rows matching multiple filter conditions
+#'
+#' Use this for tables with composite primary keys (e.g. project_members).
+#'
+#' @param table    Table name
+#' @param filters  Named list of column = value pairs (all combined with AND)
+#' @param token    User JWT
+#' @return         Deleted row(s) as a data frame
+sb_delete_where <- function(table, filters = list(), token = NULL) {
+  req <- .sb_base_req(paste0("/rest/v1/", table), token) |>
+    httr2::req_url_query(!!!.sb_filters_to_params(filters)) |>
+    httr2::req_method("DELETE")
+  resp <- httr2::req_perform(req)
+  .sb_parse(resp)
+}
+
 #' UPSERT (INSERT OR UPDATE) one or more rows
 #'
 #' Uses the PostgREST "resolution=merge-duplicates" preference.
