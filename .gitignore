@@ -1,3 +1,10 @@
+# Added 
+.Renviron
+.httr-oauth
+*.csv
+*.zip
+renv/library/
+
 # History files
 .Rhistory
 .Rapp.history
@@ -38,6 +45,16 @@ vignettes/*.pdf
 
 # R Environment Variables
 .Renviron
+
+# Google OAuth token cached by googledrive package
+.httr-oauth2
+
+# renv package library (restored via renv::restore())
+renv/library/
+renv/staging/
+
+# Uploaded data files (keep out of version control)
+data/
 
 # pkgdown site
 docs/
