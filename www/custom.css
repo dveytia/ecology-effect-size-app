@@ -1,0 +1,73 @@
+/* ============================================================
+   www/custom.css — Custom CSS overrides for bslib theme
+   ============================================================ */
+
+/* ---- Global ---------------------------------------------- */
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* ---- Cards ----------------------------------------------- */
+.card {
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+/* ---- Navbar ---------------------------------------------- */
+.navbar {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+/* ---- Review interface ------------------------------------ */
+.article-header {
+  background: #f8f9fa;
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.article-header h5 {
+  margin-bottom: 0.25rem;
+  font-weight: 600;
+}
+
+.label-group-card {
+  border-left: 4px solid var(--bs-primary);
+  background: #fdfdfd;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  border-radius: 0 6px 6px 0;
+}
+
+/* ---- Effect size result block ---------------------------- */
+.effect-result-box {
+  background: #e8f5e9;
+  border: 1px solid #a5d6a7;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  font-family: "Courier New", monospace;
+  font-size: 0.9em;
+  margin-top: 0.75rem;
+}
+
+.effect-result-box.insufficient {
+  background: #fff3e0;
+  border-color: #ffb74d;
+}
+
+/* ---- Progress bar ---------------------------------------- */
+.review-progress {
+  font-size: 0.875rem;
+  color: #6c757d;
+}
+
+/* ---- Tooltips -------------------------------------------- */
+[data-bs-toggle="tooltip"] {
+  cursor: help;
+  border-bottom: 1px dashed #adb5bd;
+}
+
+/* ---- Audit log ------------------------------------------- */
+.audit-action-save   { color: #2e7d32; font-weight: 600; }
+.audit-action-skip   { color: #e65100; font-weight: 600; }
+.audit-action-delete { color: #c62828; font-weight: 600; }

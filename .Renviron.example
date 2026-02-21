@@ -1,0 +1,23 @@
+# ============================================================
+# .Renviron.example — Required environment variables
+# ============================================================
+# Copy this file to .Renviron (in the project root) and fill
+# in your real credentials.
+#
+# IMPORTANT: .Renviron is listed in .gitignore and must NEVER
+# be committed to version control.
+#
+# After saving .Renviron, restart R for changes to take effect:
+#   Session → Restart R  (in RStudio)
+# ============================================================
+
+# --- Supabase credentials -----------------------------------
+# Found in: Supabase Dashboard → Project Settings → API
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_KEY=your-anon-public-key-here
+SUPABASE_SERVICE_KEY=your-service-role-key-here
+
+# --- Google Drive (Phase 6) ---------------------------------
+# Found in: Google Cloud Console → APIs & Services → Credentials
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret-here
