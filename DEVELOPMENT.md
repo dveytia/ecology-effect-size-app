@@ -28,13 +28,31 @@ git merge phase-N-name --no-ff -m "Phase N: <name> — validation gate passed"
 From R console (NOT browser), run the following smoke tests:
 
 ```r
+source("R/utils.R")
 source("R/supabase.R")
 readRenviron(".Renviron")
 
-# 1. Create a projects row (use your user_id from Supabase Auth dashboard)
-MY_TOKEN <- "paste-your-JWT-here"   # get from a test login (Phase 2) or Supabase debug
+# MY_TOKEN must be your SUPABASE_SERVICE_KEY (a long JWT starting with eyJ...).
+# It is NOT a UUID. Read it directly from .Renviron:
+MY_TOKEN <- Sys.getenv("SUPABASE_SERVICE_KEY")
+stopifnot(nchar(MY_TOKEN) > 50)   # quick sanity check
+
+# owner_id must be a UUID from Supabase Auth, NOT an email address.
+# How to get your UUID:
+#   Supabase dashboard → Authentication → Users → copy the UUID next to your email.
+# If you have not registered yet, do so via the app Login page first (or
+# use Authentication → Add user in the Supabase dashboard).
+MY_USER_UUID <- "a1b2c3d4-1234-5678-abcd-ef0123456789"  
+
+# Step 1: insert the user into public.users (only needed for smoke test;
+#         in normal use this is done automatically by the trigger in 03_triggers.sql)
+sb_post("users",
+  list(user_id = MY_USER_UUID, email = "deviveytia@hotmail.com"),
+  token = MY_TOKEN)
+
+# 1. Create a projects row
 new_proj <- sb_post("projects",
-  list(owner_id = "your-user-uuid",
+  list(owner_id = MY_USER_UUID,
        title = "Test Project",
        description = "Smoke test"),
   token = MY_TOKEN)
@@ -42,7 +60,7 @@ cat("Created:", new_proj$project_id, "\n")
 
 # 2. Read it back
 rows <- sb_get("projects",
-  filters = list(owner_id = "your-user-uuid"),
+  filters = list(owner_id = MY_USER_UUID),
   token   = MY_TOKEN)
 print(rows)
 
