@@ -154,21 +154,43 @@ Create 3 single labels (text, select one, boolean), 1 group with 2 children, 1 e
 
 **Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
+Note: check that location label with OpenStreetMap API works.
+**Status:** [x] Not started  [ ] In progress  [ ] Gate passed
 ---
 
 ## Phase 5: Article Upload
 
-**Branch:** `phase-5-upload`
+**Branch:** `phase-5-article-upload`
 
 **Deliverables:**
-- `modules/mod_article_upload.R`
-- `R/duplicates.R` — all four detection methods
-- `modules/mod_upload_management.R`
+- `modules/mod_article_upload.R` — full CSV upload with duplicate detection ✅
+- `R/duplicates.R` — all four detection methods fully implemented ✅
+- `modules/mod_upload_management.R` — upload history + accept/reject duplicate flags ✅
+- `sql/05_duplicate_flags.sql` — persistent duplicate flag queue table ✅
+- `tests/test_duplicates.R` — 20 unit tests, all passing ✅
 
 **Validation Gate 5:**
 Upload 20 articles. Upload second CSV with 2 exact DOI duplicates, 1 title-year dup, 1 fuzzy match, 5 new. Verify correct flagging and reviewer accept/reject workflow.
 
-**Status:** [ ] Not started
+**Pre-flight — run `sql/05_duplicate_flags.sql` in Supabase SQL Editor before testing Gate 5.**
+
+**Implementation notes:**
+- `check_duplicates(new_df, existing_df)` runs four staged checks per incoming row — stopping at the first match:
+  1. Exact DOI (after cleaning) — flags as `exact_doi`
+  2. Normalised title + year — flags as `title_year`
+  3. Year + first 15 chars of DOI — flags as `partial_doi`
+  4. Jaro-Winkler distance < 0.05, same year — flags as `fuzzy` with similarity score
+- `read_upload_csv()` and `validate_upload_columns()` are helpers added to `R/duplicates.R` for re-use.
+- `readr`, `stringdist`, and `jsonlite` added to `global.R` library list.
+- On upload, clean articles are inserted immediately to `articles`; flagged rows are written to `duplicate_flags` (new table) with `status = 'pending'`.
+- `mod_upload_management_server` takes an optional `upload_refresh` reactiveVal shared with `mod_article_upload_server`; incrementing it triggers an automatic refresh of the management tab after every upload.
+- `mod_project_home_server` now owns the shared `upload_refresh <- reactiveVal(0)` and passes it to both sub-module servers.
+- Accept decision: inserts the article from `article_data` JSONB, updates `duplicate_flags.status = 'accepted'`.
+- Reject decision: sets `duplicate_flags.status = 'rejected'` (no article inserted).
+- `shinyjs::reset("csv_file")` clears the file input after a successful upload so the user can upload a second batch immediately.
+- Upload batch record (`uploads` table) is created before article inserts; `rows_uploaded` = clean rows, `rows_flagged` = flagged rows.
+
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
 

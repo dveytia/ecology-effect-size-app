@@ -139,15 +139,28 @@ mod_project_home_server <- function(id, project_id, session_rv, app_state) {
                              project_id = project_id,
                              session_rv = session_rv)
 
+    # ---- Shared upload refresh signal -----------------
+    upload_refresh <- reactiveVal(0)
+
     output$upload_tab <- renderUI({
       req(project_id())
-      .stub_tab(5, "Article Upload", "upload")
+      mod_article_upload_ui(ns("article_upload"))
     })
+
+    mod_article_upload_server("article_upload",
+                              project_id     = project_id,
+                              session_rv     = session_rv,
+                              upload_refresh = upload_refresh)
 
     output$upload_mgmt_tab <- renderUI({
       req(project_id())
-      .stub_tab(5, "Upload History & Duplicate Management", "history")
+      mod_upload_management_ui(ns("upload_mgmt"))
     })
+
+    mod_upload_management_server("upload_mgmt",
+                                 project_id     = project_id,
+                                 session_rv     = session_rv,
+                                 upload_refresh = upload_refresh)
 
     output$export_tab <- renderUI({
       req(project_id())
