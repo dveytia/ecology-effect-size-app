@@ -84,7 +84,7 @@ cat("Deleted OK\n")
 
 ---
 
-## Phase 2: Authentication ✅ (current)
+## Phase 2: Authentication ✅ 
 
 **Branch:** `phase-2-auth`
 
@@ -120,7 +120,13 @@ User A creates a project. User A invites User B by email. User B logs in and see
 - Both module servers are initialised once after login; `project_id` is passed as a reactive so the project home reacts when app_state changes
 - `mod_project_home_server` signature changed: now takes `app_state` in addition to `project_id` and `session_rv`
 
-**Pre-flight: run `sql/02_rls_policies.sql` in Supabase SQL Editor before testing Gate 3.**
+**RLS debugging notes (resolved):**
+- **Root cause:** RLS policies defaulting to `TO PUBLIC` (the PostgreSQL default when no `TO` clause is specified) caused Supabase PostgREST to reject INSERTs with `42501 — new row violates row-level security policy`, even though the `WITH CHECK` expression was correct.
+- **Fix:** Every policy must explicitly target `TO authenticated`.
+- **Additional fix:** `auth.uid()` was replaced with a custom `public.current_user_id()` function that reads the JWT `sub` claim directly from PostgREST GUC variables (`request.jwt.claim.sub`), avoiding any permission issues with the `auth` schema.
+- Diagnostic scripts used during debugging: `sql/05_diagnostic.sql` through `sql/09_minimal_rls_debug.sql`. The definitive policy file is `sql/10_final_rls_policies.sql` (also merged into `sql/02_rls_policies.sql`).
+
+**Pre-flight: run `sql/02_rls_policies.sql` (or `sql/10_final_rls_policies.sql`) in Supabase SQL Editor before testing Gate 3.**
 
 **Status:** [ ] Not started  [x] In progress  [ ] Gate passed
 

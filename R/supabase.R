@@ -28,6 +28,9 @@
 # Build base request to the PostgREST REST API endpoint.
 # If `token` is provided (user JWT), it is used for RLS.
 # Otherwise the anon key is used.
+# req_error() is disabled so httr2 never auto-throws on 4xx/5xx —
+# .sb_parse() handles error detection and extracts the Supabase
+# error body (message, hint, code) for informative error messages.
 .sb_base_req <- function(path, token = NULL) {
   key <- if (!is.null(token)) token else .sb_anon_key()
   httr2::request(paste0(.sb_url(), path)) |>
@@ -36,12 +39,29 @@
       "Authorization" = paste("Bearer", key),
       "Content-Type"  = "application/json",
       "Prefer"        = "return=representation"
-    )
+    ) |>
+    httr2::req_error(is_error = function(resp) FALSE)
 }
 
 # Parse an httr2 response; stop on HTTP error with message.
+# Includes the Supabase response body in the error so the exact
+# reason (e.g. RLS violation, FK failure) is visible.
 .sb_parse <- function(resp) {
-  httr2::resp_check_status(resp)
+  if (httr2::resp_is_error(resp)) {
+    body <- tryCatch(
+      httr2::resp_body_json(resp),
+      error = function(e) list()
+    )
+    detail  <- body$message %||% body$hint %||% body$details %||% ""
+    code    <- body$code    %||% ""
+    status  <- httr2::resp_status(resp)
+    stop(sprintf("HTTP %s %s%s%s",
+                 status,
+                 httr2::resp_status_desc(resp),
+                 if (nchar(code)   > 0) paste0(" [", code, "]")   else "",
+                 if (nchar(detail) > 0) paste0(" — ", detail)     else ""),
+         call. = FALSE)
+  }
   httr2::resp_body_json(resp, simplifyVector = TRUE)
 }
 
@@ -85,6 +105,12 @@ sb_get <- function(table, filters = list(), select = "*", token = NULL) {
 #' @param token  User JWT
 #' @return       Inserted row as a list
 sb_post <- function(table, body, token = NULL) {
+  # Log the INSERT for debugging RLS issues (Phase 3)
+  if (getOption("sb.debug", FALSE)) {
+    tok_preview <- if (!is.null(token)) substr(token, 1, 20) else "NULL"
+    message(sprintf("[sb_post] table=%s token=%s... body=%s",
+                    table, tok_preview, jsonlite::toJSON(body, auto_unbox = TRUE)))
+  }
   req <- .sb_base_req(paste0("/rest/v1/", table), token) |>
     httr2::req_body_json(body) |>
     httr2::req_method("POST")
@@ -163,7 +189,8 @@ sb_upsert <- function(table, body, on_conflict = NULL, token = NULL) {
       "Prefer"        = prefer
     ) |>
     httr2::req_body_json(body) |>
-    httr2::req_method("POST")
+    httr2::req_method("POST") |>
+    httr2::req_error(is_error = function(resp) FALSE)
   if (!is.null(on_conflict)) {
     req <- httr2::req_url_query(req, on_conflict = on_conflict)
   }

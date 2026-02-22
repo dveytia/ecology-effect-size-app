@@ -1,15 +1,18 @@
 -- ============================================================
--- sql/02_rls_policies.sql
--- Row-Level Security policies for all tables
--- Run AFTER 01_create_tables.sql in the Supabase SQL Editor
+-- sql/10_final_rls_policies.sql
+-- DEFINITIVE RLS policies — every policy explicitly targets
+-- the 'authenticated' role (not PUBLIC).
 --
--- IMPORTANT: Every policy explicitly targets TO authenticated.
--- Omitting TO (which defaults to PUBLIC) causes Supabase
--- PostgREST to reject writes with 42501 even when the
--- WITH CHECK expression is correct.
+-- Root cause: policies defaulting to TO PUBLIC caused
+-- Supabase PostgREST to reject INSERTs with 42501, even
+-- though the same WITH CHECK expression works when the
+-- policy explicitly targets TO authenticated.
 --
--- Uses public.current_user_id() instead of auth.uid() to
--- read the JWT sub claim directly from PostgREST GUC variables.
+-- This script:
+--   1. Drops ALL existing policies on every table (by name)
+--   2. Drops any leftover debug policies/triggers/tables
+--   3. Recreates current_user_id() and user_can_access_project()
+--   4. Creates all policies with TO authenticated
 -- ============================================================
 
 -- ============================================================
@@ -29,7 +32,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.effect_sizes        TO authentica
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.audit_log           TO authenticated;
 
 -- ============================================================
--- 1. Cleanup: drop ALL existing policies on managed tables
+-- 1. Cleanup: drop ALL policies on all tables
+--    (catches any leftover debug policies too)
 -- ============================================================
 DO $$
 DECLARE
@@ -51,6 +55,11 @@ BEGIN
 END;
 $$;
 
+-- Cleanup debug artifacts from 09_minimal_rls_debug.sql
+DROP TRIGGER IF EXISTS debug_projects_insert ON public.projects;
+DROP FUNCTION IF EXISTS public._debug_projects_insert();
+DROP TABLE IF EXISTS public._debug_log;
+
 -- ============================================================
 -- 2. Enable RLS
 -- ============================================================
@@ -65,8 +74,7 @@ ALTER TABLE public.effect_sizes       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_log          ENABLE ROW LEVEL SECURITY;
 
 -- ============================================================
--- 3. Custom UID function — reads JWT sub claim directly from
---    PostgREST GUC variables
+-- 3. Custom UID function
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.current_user_id()
 RETURNS UUID
@@ -326,3 +334,11 @@ CREATE POLICY auditlog_insert ON public.audit_log
     user_id = public.current_user_id()
     AND public.user_can_access_project(project_id)
   );
+
+-- ============================================================
+-- Verification: list all policies to confirm TO authenticated
+-- ============================================================
+SELECT tablename, policyname, permissive, roles, cmd
+FROM   pg_policies
+WHERE  schemaname = 'public'
+ORDER BY tablename, policyname;
