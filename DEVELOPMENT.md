@@ -263,18 +263,28 @@ Review 3 articles end-to-end (all labels, label group with 3 instances, skip). V
 
 ---
 
-## Phase 8: Effect Size Engine
+## Phase 8: Effect Size Engine ✅
 
 **Branch:** `phase-8-effectsize`
 
 **Deliverables:**
-- `R/effectsize.R` — all conversion functions
-- `tests/test_effectsize.R` — all 11 unit tests passing
+- `R/effectsize.R` — all conversion functions ✅
+- `tests/test_effectsize.R` — all 11 spec tests + 1 smoke test + 1 time_trend bonus = 37 assertions, 0 failures ✅
 
 **Validation Gate 8:**
 `devtools::test()` → 0 failures. Hand-calculate Pathway B difference-in-differences and verify against app output. Also test effect size calculations for other types of study methods to verify.
 
-**Status:** [ ] Not started
+**Implementation notes:**
+- `compute_effect_size(input_list)` is the single entry point; routes on `input_list$study_design`
+- `time_trend` design is aliased to `regression` internally
+- Design helpers all return `list(r, n, se_r, status, warnings)`
+- Pathway B (`es_interaction_b`) calls `compute_effect_size` recursively for each group, then computes `z_diff = atanh(r_A) - atanh(r_B)` and `var_z_diff = var_z_A + var_z_B`; returns pre-built `z` and `var_z` so the main function skips a second Fisher Z call
+- `convert_var_to_sd()` handles SE → SD (×√n), 95% CI → SD (÷1.96), IQR → SD (÷1.35); IQR conversion appends `"IQR used for SD"` to warnings
+- `fisher_z()` returns `var_z = 1/(n-3)` if `n > 3`; fallback `(se_r / (1-r²))²` if `se_r` present; NULL otherwise
+- Small SD approximation (`use_small_sd_approx = TRUE`): SD = 0.01 × |mean|; sets `effect_status = "small_sd_used"`; save is never blocked
+- `%||%` null-coalescing operator designed to pass vectors (not just scalars) so warning arrays are preserved through the call stack
+
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
 
@@ -333,6 +343,7 @@ Reviewer JWT cannot access another project's articles directly (API returns 403)
 | 2026-02-21 | Phase 3 dashboard & projects implemented | Full project CRUD, invite/leave membership, project home with tab stubs. `sb_delete_where` added to `R/supabase.R`. `server.R` updated to three-state page router. `mod_project_home_server` now receives `app_state`. Run `sql/02_rls_policies.sql` before Gate 3 validation. |
 | 2026-02-22 | Phase 6 Google Drive integration implemented | `R/gdrive.R` fully implemented; `sql/07_gdrive_columns.sql` adds `article_num` to articles and ensures Drive columns exist on projects. Edit Project modal gains Drive URL + Sync Now. `global.R` calls `gdrive_init()` at startup. |
 | 2026-02-22 | Phase 7 Review Interface implemented | `modules/mod_review.R` fully implemented; wired into `mod_project_home.R` replacing the Phase 7 stub. Dynamic label form (all 10 variable types), label groups with multi-instance add/remove, Save/Next/Skip actions, concurrency conflict detection, audit log writes. Effect size fields stubbed for Phase 9. |
+| 2026-02-22 | Phase 8 Effect Size Engine implemented | `R/effectsize.R` fully implemented with all design pathways (control/treatment Hedges g, correlation, regression, interaction Pathway A & B, time_trend). `tests/test_effectsize.R` has 37 passing assertions (0 failures). `%||%` null-coalesce allows vector warnings to propagate correctly. |
 
 ---
 
