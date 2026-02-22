@@ -124,92 +124,114 @@ mod_upload_management_server <- function(id, project_id, session_rv,
     })
 
     # ---- Delete upload batch ----------------------------
-    deleting_batch_id <- reactiveVal(NULL)
+    deleting_batch_id  <- reactiveVal(NULL)
+    deleting_n_reviewed  <- reactiveVal(0)   # articles that will be KEPT
+    deleting_n_deletable <- reactiveVal(0)   # articles that will be REMOVED
 
     observeEvent(input$delete_batch, {
       bid   <- input$delete_batch
       req(bid)
       token <- session_rv$token; req(token)
 
-      # Count articles in this batch and check for reviewed/skipped ones
       tryCatch({
         arts <- sb_get("articles",
                        filters = list(upload_batch_id = bid),
-                       select  = "article_id,title,review_status",
+                       select  = "article_id,review_status",
                        token   = token)
 
-        n_total    <- if (is.data.frame(arts)) nrow(arts) else 0
-        n_reviewed <- if (n_total > 0)
-          sum(arts$review_status %in% c("reviewed", "skipped"))
-        else 0
+        n_total      <- if (is.data.frame(arts)) nrow(arts) else 0
+        # Only fully-reviewed articles are protected; unreviewed + skipped are deletable
+        n_reviewed   <- if (n_total > 0) sum(arts$review_status == "reviewed")         else 0
+        n_deletable  <- if (n_total > 0) sum(arts$review_status %in% c("unreviewed", "skipped")) else 0
 
         deleting_batch_id(bid)
+        deleting_n_reviewed(n_reviewed)
+        deleting_n_deletable(n_deletable)
 
-        if (n_reviewed > 0) {
-          # Blocked — show informational modal only
-          showModal(modalDialog(
-            title  = "Cannot Delete Batch",
-            size   = "s",
-            footer = modalButton("OK"),
-            div(class = "alert alert-danger mb-0",
-                icon("ban"),
-                sprintf(
-                  " This batch contains %d reviewed or skipped article%s.",
-                  n_reviewed, if (n_reviewed == 1) "" else "s"),
-                tags$br(),
-                span(class = "small",
-                  "Reviewed articles cannot be deleted. ",
-                  "Only batches where all articles are unreviewed can be removed.")
-            )
-          ))
-        } else {
-          # Safe — ask for confirmation
-          fname_label <- {
-            df  <- batches()
-            row <- df[df$upload_batch_id == bid, , drop = FALSE]
-            if (nrow(row) > 0) row$filename[1] %||% "(unnamed)" else "(unnamed)"
-          }
-          showModal(modalDialog(
-            title  = "Delete Upload Batch?",
-            size   = "m",
-            footer = tagList(
-              modalButton("Cancel"),
-              actionButton(ns("confirm_delete_batch"), "Delete",
-                           class = "btn btn-danger")
-            ),
-            if (n_total == 0) {
-              p("This batch has no inserted articles. The batch record will be removed.")
-            } else {
-              tagList(
-                p("This will permanently delete ",
-                  tags$strong(sprintf("%d unreviewed article%s",
-                    n_total, if (n_total == 1) "" else "s")),
-                  " from batch ", tags$strong(fname_label), "."),
-                p(class = "text-muted small",
-                  icon("info-circle"),
-                  " Pending duplicate flags for this batch will also be discarded.")
-              )
-            }
-          ))
+        fname_label <- {
+          df  <- batches()
+          row <- df[df$upload_batch_id == bid, , drop = FALSE]
+          if (nrow(row) > 0) row$filename[1] %||% "(unnamed)" else "(unnamed)"
         }
+
+        body_content <- if (n_total == 0) {
+          p("This batch has no inserted articles. The batch record will be removed.")
+        } else {
+          tagList(
+            # Warning when reviewed articles will be left behind
+            if (n_reviewed > 0)
+              div(class = "alert alert-warning",
+                  icon("exclamation-triangle"),
+                  sprintf(
+                    " %d reviewed article%s cannot be deleted and will be retained.",
+                    n_reviewed, if (n_reviewed == 1) "" else "s"))
+            else NULL,
+
+            # Count summary
+            tags$table(class = "table table-sm mb-3",
+              tags$tbody(
+                tags$tr(
+                  tags$td(icon("trash"), " Will be deleted"),
+                  tags$td(tags$strong(
+                    sprintf("%d article%s (unreviewed + skipped)",
+                            n_deletable, if (n_deletable == 1) "" else "s")))
+                ),
+                tags$tr(
+                  tags$td(icon("lock"), " Will be kept"),
+                  tags$td(tags$strong(
+                    sprintf("%d reviewed article%s",
+                            n_reviewed, if (n_reviewed == 1) "" else "s")))
+                )
+              )
+            ),
+
+            if (n_reviewed > 0)
+              p(class = "text-muted small",
+                icon("info-circle"),
+                sprintf(
+                  " The batch record for \u2018%s\u2019 will also be retained ",
+                  fname_label),
+                "because it still has reviewed articles attached to it.")
+            else
+              p(class = "text-muted small",
+                icon("info-circle"),
+                " Pending duplicate flags for this batch will also be discarded.")
+          )
+        }
+
+        showModal(modalDialog(
+          title  = sprintf("Delete from batch \u2018%s\u2019?", fname_label),
+          size   = "m",
+          footer = tagList(
+            modalButton("Cancel"),
+            if (n_deletable > 0 || n_total == 0)
+              actionButton(ns("confirm_delete_batch"),
+                           if (n_reviewed > 0) "Delete unreviewed & skipped" else "Delete",
+                           class = "btn btn-danger")
+            else
+              tags$span(class = "text-muted small align-self-center",
+                        "Nothing to delete.")
+          ),
+          body_content
+        ))
       }, error = function(e) {
         showNotification(paste("Error checking batch:", e$message), type = "error")
       })
     })
 
     observeEvent(input$confirm_delete_batch, {
-      bid   <- deleting_batch_id()
+      bid          <- deleting_batch_id()
+      n_reviewed   <- deleting_n_reviewed()
       req(bid)
       pid   <- project_id()
       token <- session_rv$token
       req(pid, token)
 
       tryCatch({
-        # 1. Delete all unreviewed articles in this batch
-        #    (RLS ensures only accessible articles are touched)
+        # 1. Delete unreviewed AND skipped articles in this batch
         sb_delete_where("articles",
                         filters = list(upload_batch_id = bid,
-                                       review_status   = "eq.unreviewed"),
+                                       review_status   = "in.(unreviewed,skipped)"),
                         token   = token)
 
         # 2. Delete pending duplicate flags for this batch
@@ -217,12 +239,23 @@ mod_upload_management_server <- function(id, project_id, session_rv,
                         filters = list(upload_batch_id = bid),
                         token   = token)
 
-        # 3. Delete the batch record itself
-        sb_delete("uploads", "upload_batch_id", bid, token = token)
+        # 3. Only delete the uploads row if no reviewed articles remain
+        #    (FK constraint prevents deletion while reviewed articles still reference it)
+        if (n_reviewed == 0) {
+          sb_delete("uploads", "upload_batch_id", bid, token = token)
+        }
 
         removeModal()
         deleting_batch_id(NULL)
-        showNotification("Upload batch deleted.", type = "message")
+        deleting_n_reviewed(0)
+        deleting_n_deletable(0)
+
+        msg <- if (n_reviewed > 0)
+          sprintf("Unreviewed and skipped articles deleted. %d reviewed article%s retained.",
+                  n_reviewed, if (n_reviewed == 1) "" else "s")
+        else
+          "Upload batch deleted."
+        showNotification(msg, type = "message", duration = 8)
         refresh_rv(refresh_rv() + 1)
       }, error = function(e) {
         showNotification(paste("Delete failed:", e$message), type = "error")
