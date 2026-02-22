@@ -277,6 +277,21 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
       row <- df[df$project_id == pid, , drop = FALSE]
       if (nrow(row) == 0) return()
       editing_project(row)
+
+      drive_url_val <- if ("drive_folder_url" %in% names(row) &&
+                           !is.na(row$drive_folder_url[1]))
+                         row$drive_folder_url[1] else ""
+
+      last_synced_label <- if ("drive_last_synced" %in% names(row) &&
+                               !is.na(row$drive_last_synced[1]))
+        tryCatch(
+          format(as.POSIXct(row$drive_last_synced[1],
+                            format = "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
+                 "%Y-%m-%d %H:%M UTC"),
+          error = function(e) as.character(row$drive_last_synced[1])
+        )
+      else "Never synced"
+
       showModal(modalDialog(
         title  = "Edit Project",
         size   = "m",
@@ -289,7 +304,30 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
                   value = row$title[1]),
         textAreaInput(ns("edit_proj_desc"), "Description",
                       value = if (is.na(row$description[1])) "" else row$description[1],
-                      rows  = 3)
+                      rows  = 3),
+        hr(),
+        # ---- Google Drive section --------------------------------
+        h6(icon("folder-open"), " Google Drive PDF Folder"),
+        textInput(
+          ns("edit_proj_drive_url"),
+          label       = "Drive Folder URL",
+          value       = drive_url_val,
+          placeholder = "https://drive.google.com/drive/folders/FOLDER_ID"
+        ),
+        helpText(
+          icon("info-circle"),
+          " Paste the URL of a shared Google Drive folder containing PDFs",
+          " named ", tags$code("[article_num].pdf"),
+          " (e.g. ", tags$code("42.pdf"), ").",
+          " The folder must be shared as \"Anyone with the link can view\"."
+        ),
+        div(class = "text-muted small mb-2",
+            icon("clock"),
+            sprintf(" Last synced: %s", last_synced_label)),
+        actionButton(ns("btn_sync_drive"),
+                     tagList(icon("sync"), " Sync Now"),
+                     class = "btn btn-outline-primary btn-sm"),
+        uiOutput(ns("sync_result"))
       ))
     })
 
@@ -300,10 +338,17 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
         showNotification("Project title is required.", type = "warning")
         return()
       }
+      drive_url <- trimws(input$edit_proj_drive_url %||% "")
+      folder_id <- if (nchar(drive_url) > 0) extract_drive_folder_id(drive_url)
+                   else NA_character_
       tryCatch({
         sb_patch("projects", "project_id", row$project_id[1],
-          list(title       = title,
-               description = trimws(input$edit_proj_desc)),
+          list(
+            title            = title,
+            description      = trimws(input$edit_proj_desc),
+            drive_folder_url = if (nchar(drive_url) > 0) drive_url      else NULL,
+            drive_folder_id  = if (!is.na(folder_id))    folder_id      else NULL
+          ),
           token = session_rv$token)
         removeModal()
         editing_project(NULL)
@@ -312,6 +357,102 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
       }, error = function(e) {
         showNotification(paste("Error updating project:", e$message), type = "error")
       })
+    })
+
+    # ===========================================================
+    # ACTION: Sync Drive folder
+    # ===========================================================
+    observeEvent(input$btn_sync_drive, {
+      row <- editing_project()
+      req(row)
+
+      drive_url <- trimws(input$edit_proj_drive_url %||% "")
+
+      if (nchar(drive_url) == 0) {
+        output$sync_result <- renderUI(
+          div(class = "alert alert-warning mt-2",
+              icon("exclamation-circle"),
+              " Please paste a Drive folder URL before syncing.")
+        )
+        return()
+      }
+
+      folder_id <- extract_drive_folder_id(drive_url)
+      if (is.na(folder_id)) {
+        output$sync_result <- renderUI(
+          div(class = "alert alert-danger mt-2",
+              icon("times"),
+              " Invalid Drive folder URL. Expected:",
+              tags$code("https://drive.google.com/drive/folders/FOLDER_ID"))
+        )
+        return()
+      }
+
+      pid <- row$project_id[1]
+
+      # Save URL + folder_id immediately so they persist even if sync fails
+      tryCatch(
+        sb_patch("projects", "project_id", pid,
+                 list(drive_folder_url = drive_url,
+                      drive_folder_id  = folder_id),
+                 token = session_rv$token),
+        error = function(e)
+          showNotification(paste("Warning: could not save Drive URL:", e$message),
+                           type = "warning")
+      )
+
+      # Show spinner
+      output$sync_result <- renderUI(
+        div(class = "alert alert-info mt-2",
+            icon("spinner"), " Syncing Drive folder...")
+      )
+
+      # Run sync
+      result <- tryCatch(
+        sync_drive_folder(pid, folder_id, token = session_rv$token),
+        error = function(e) list(error = e$message)
+      )
+
+      if (!is.null(result$error)) {
+        output$sync_result <- renderUI(
+          div(class = "alert alert-danger mt-2",
+              icon("times"),
+              " Sync failed: ", result$error,
+              tags$br(),
+              tags$small(class = "text-muted",
+                "Ensure the folder is shared as \"Anyone with the link can view\"",
+                " and that Google Drive auth has been set up (run gdrive_init_oauth())",
+                " from the R console)."))
+        )
+        return()
+      }
+
+      skipped_ui <- if (length(result$skipped_names) > 0)
+        tagList(
+          tags$br(),
+          tags$small(
+            class = "text-warning",
+            icon("exclamation-triangle"),
+            " Skipped filenames: ",
+            paste(paste0("'", result$skipped_names, "'"), collapse = ", ")
+          )
+        )
+      else NULL
+
+      output$sync_result <- renderUI(
+        div(class = "alert alert-success mt-2",
+            tags$strong("Sync complete."),
+            tags$ul(
+              class = "mb-1 mt-1",
+              tags$li(sprintf("Files found in folder:  %d", result$files_found)),
+              tags$li(sprintf("Matched to articles:   %d", result$files_matched)),
+              tags$li(sprintf("Skipped (no match):    %d", result$files_skipped))
+            ),
+            skipped_ui)
+      )
+
+      # Force owned project list to reload (drive_last_synced changed)
+      refresh_trigger(refresh_trigger() + 1)
     })
 
     # ===========================================================
