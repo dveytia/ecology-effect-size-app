@@ -135,12 +135,24 @@ User A creates a project. User A invites User B by email. User B logs in and see
 **Branch:** `phase-4-labels`
 
 **Deliverables:**
-- `modules/mod_label_builder.R` — all variable types, group containers, reorder
+- `modules/mod_label_builder.R` — all variable types, group containers, reorder ✅
 
 **Validation Gate 4:**
-Create 3 single labels, 1 group with 2 children, 1 effect_size label. Save and reload. Edit one label name and verify persistence.
+Create 3 single labels (text, select one, boolean), 1 group with 2 children, 1 effect_size label. Save and reload. Edit one label name and verify persistence.
 
-**Status:** [ ] Not started
+**Implementation notes:**
+- Label builder is owner-only; reviewers see a read-only notice.
+- All 10 variable types supported in the Add Label modal (`text`, `integer`, `numeric`, `boolean`, `select one`, `select multiple`, `YYYY-MM-DD`, `bounding_box`, `openstreetmap_location`, `effect_size`).
+- `allowed_values` textarea (newline-separated) shown for `select one` / `select multiple` types.
+- `Add Label Group` creates a row with `label_type = 'group'`, `variable_type = 'text'` (placeholder to satisfy DB CHECK constraint; groups are containers, not inputs).
+- Child labels are added via the **+ Add Child Label** button within a group row; `parent_label_id` is set to the group's UUID.
+- Up/down arrows reorder within the same sibling scope (top-level vs. children use separate scopes). Swaps `order_index` values between adjacent rows via two `sb_patch` calls.
+- Delete confirmation warns (but does not block) if the project has any reviewed articles.
+- JSON Schema Preview panel renders a live preview of the label schema using `jsonlite::toJSON`. Groups show as `{ type: "group", items: { ... } }`.
+- Machine name auto-derived from display name (JS inline: lowercase + underscores). User can override; override is locked once they manually edit the field.
+- `mod_label_builder_server` is called inside `mod_project_home_server`; the labels tab `renderUI` renders `mod_label_builder_ui(ns("label_builder"))`.
+
+**Status:** [ ] Not started  [x] In progress  [ ] Gate passed
 
 ---
 

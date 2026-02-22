@@ -132,8 +132,12 @@ mod_project_home_server <- function(id, project_id, session_rv, app_state) {
 
     output$labels_tab <- renderUI({
       req(project_id())
-      .stub_tab(4, "Label Builder", "tags")
+      mod_label_builder_ui(ns("label_builder"))
     })
+
+    mod_label_builder_server("label_builder",
+                             project_id = project_id,
+                             session_rv = session_rv)
 
     output$upload_tab <- renderUI({
       req(project_id())
