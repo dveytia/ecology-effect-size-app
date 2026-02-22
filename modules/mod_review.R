@@ -296,6 +296,23 @@ mod_review_server <- function(id, project_id, session_rv) {
     })
 
     # --------------------------------------------------------
+    # Current article row — cached snapshot so review_panel
+    # does NOT depend on all_articles() and won't re-render
+    # when articles_refresh() fires after Save.
+    # --------------------------------------------------------
+    current_article_row <- reactiveVal(NULL)
+
+    observeEvent(current_article_id(), {
+      aid <- current_article_id()
+      if (is.null(aid)) { current_article_row(NULL); return() }
+      df <- all_articles()
+      if (!is.data.frame(df) || nrow(df) == 0) { current_article_row(NULL); return() }
+      row <- df[df$article_id == aid, , drop = FALSE]
+      if (nrow(row) == 0) { current_article_row(NULL); return() }
+      current_article_row(row)
+    }, ignoreNULL = FALSE)
+
+    # --------------------------------------------------------
     # Review panel (right column)
     # --------------------------------------------------------
     output$review_panel <- renderUI({
@@ -307,10 +324,8 @@ mod_review_server <- function(id, project_id, session_rv) {
         ))
       }
 
-      df <- all_articles()
-      if (!is.data.frame(df) || nrow(df) == 0) return(NULL)
-      row <- df[df$article_id == aid, , drop = FALSE]
-      if (nrow(row) == 0) return(NULL)
+      row <- current_article_row()
+      if (is.null(row) || nrow(row) == 0) return(NULL)
 
       # PDF button
       pdf_link <- row$pdf_drive_link[1]
@@ -448,12 +463,7 @@ mod_review_server <- function(id, project_id, session_rv) {
             insts[[gn]] <- lapply(seq_len(n_exist), function(.) .new_key())
             changed <- TRUE
           } else if (length(gn_insts) == 0) {
-            existing <- meta[[gn]]
-            n_exist  <- if (is.list(existing)) {
-                          if (length(existing) > 0) length(existing) else 1L
-                        } else 1L
-            insts[[gn]] <- lapply(seq_len(n_exist), function(.) .new_key())
-            changed <- TRUE
+            # Allow zero instances — user explicitly removed all
           }
         }
       }
