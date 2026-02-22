@@ -10,6 +10,9 @@ library(shiny)
 library(bslib)
 library(shinyjs)
 library(httr2)
+library(readr)
+library(stringdist)
+library(jsonlite)
 
 # ---- Source helpers -----------------------------------------
 source("R/utils.R")
