@@ -84,6 +84,9 @@ mod_article_upload_server <- function(id, project_id, session_rv,
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
+    # upload_done must be declared FIRST so existing_articles can depend on it
+    upload_done <- reactiveVal(0)
+
     # ---- Parse result reactive ---------------------------
     parse_result <- reactive({
       req(input$csv_file)
@@ -103,7 +106,11 @@ mod_article_upload_server <- function(id, project_id, session_rv,
     })
 
     # ---- Existing articles for this project --------------
+    # Depends on upload_done so it re-fetches after every successful upload,
+    # and on input$csv_file so each new file selection sees the latest DB state.
     existing_articles <- reactive({
+      upload_done()          # invalidate after a completed upload
+      input$csv_file         # invalidate when user picks a new file
       pid <- project_id()
       req(pid, session_rv$token)
       tryCatch({
@@ -245,8 +252,7 @@ mod_article_upload_server <- function(id, project_id, session_rv,
     })
 
     # ---- Upload handler ----------------------------------
-    upload_done <- reactiveVal(0)
-
+    # (upload_done is declared above existing_articles — do not re-declare here)
     observeEvent(input$btn_upload, {
       pr  <- parse_result()
       req(pr$ok)
