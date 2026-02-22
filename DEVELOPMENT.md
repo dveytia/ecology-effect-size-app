@@ -84,7 +84,7 @@ cat("Deleted OK\n")
 
 ---
 
-## Phase 2: Authentication ✅ (current)
+## Phase 2: Authentication ✅ 
 
 **Branch:** `phase-2-auth`
 
@@ -100,7 +100,7 @@ Open two browser tabs. Log in as User A in tab 1, User B in tab 2. Verify each s
 
 ---
 
-## Phase 3: Dashboard & Projects
+## Phase 3: Dashboard & Projects ✅ (current)
 
 **Branch:** `phase-3-dashboard`
 
@@ -112,7 +112,21 @@ Open two browser tabs. Log in as User A in tab 1, User B in tab 2. Verify each s
 **Validation Gate 3:**
 User A creates a project. User A invites User B by email. User B logs in and sees the project under Joined Projects. User B leaves the project. User A still sees it. User A cannot see a third user's project.
 
-**Status:** [ ] Not started
+**Implementation notes:**
+- `Shiny.setInputValue()` in onclick attributes passes the project UUID as the input value, avoiding fragile per-project dynamic observers
+- `sb_delete_where()` added to `R/supabase.R` to handle composite-key DELETE on `project_members`
+- Service key used server-side only for email → user_id lookup (never sent to browser)
+- `server.R` now has a three-state page router: login / dashboard / project_home
+- Both module servers are initialised once after login; `project_id` is passed as a reactive so the project home reacts when app_state changes
+- `mod_project_home_server` signature changed: now takes `app_state` in addition to `project_id` and `session_rv`
+
+**RLS notes:**
+- Every `CREATE POLICY` must include `TO authenticated` — omitting it (which defaults to `TO PUBLIC`) causes Supabase PostgREST to reject writes with `42501`.
+- `auth.uid()` replaced with `public.current_user_id()` which reads the JWT `sub` claim directly from PostgREST GUC variables (`request.jwt.claim.sub`).
+
+**Pre-flight: run `sql/02_rls_policies.sql` in Supabase SQL Editor before testing Gate 3.**
+
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
 
@@ -243,6 +257,7 @@ Reviewer JWT cannot access another project's articles directly (API returns 403)
 |------|-----------------|------------|
 | 2026-02-21 | Phase 1 scaffold initialised | All stubs created; SQL ready to run |
 | 2026-02-21 | Phase 2 authentication implemented | `R/auth.R` refresh/guard fully implemented; `server.R` gains `refresh_token` field and 30 s auto-refresh timer |
+| 2026-02-21 | Phase 3 dashboard & projects implemented | Full project CRUD, invite/leave membership, project home with tab stubs. `sb_delete_where` added to `R/supabase.R`. `server.R` updated to three-state page router. `mod_project_home_server` now receives `app_state`. Run `sql/02_rls_policies.sql` before Gate 3 validation. |
 
 ---
 
