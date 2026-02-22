@@ -139,8 +139,8 @@ mod_effect_size_ui_ui <- function(id) {
         strong("Study Design & Statistics")
       ),
       div(class = "card-body",
-        selectInput(ns("study_design"), "Study design",
-                    choices = .study_design_choices),
+        # Study design dropdown (hidden when interaction_effect is checked)
+        uiOutput(ns("study_design_panel")),
 
         # Conditional panels per design
         uiOutput(ns("design_fields"))
@@ -587,22 +587,63 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
 
     # ---- Helper: reset all fields ----
     .reset_all_fields <- function() {
+      # Reset interaction first so study_design dropdown re-appears
+      updateCheckboxInput(session, "interaction_effect", value = FALSE)
       for (fld in c("study_method", "response_scale", "response_distribution",
-                     "predictor_distribution", "study_design")) {
+                     "predictor_distribution")) {
         updateSelectInput(session, fld, selected = "")
       }
+      # study_design needs a short delay since it may be re-rendered after
+      # interaction_effect is unchecked
+      shinyjs::delay(100, {
+        updateSelectInput(session, "study_design", selected = "")
+      })
       for (fld in c("response_variable_name", "response_unit",
                      "predictor_variable_name", "predictor_unit")) {
         updateTextInput(session, fld, value = "")
       }
-      updateCheckboxInput(session, "interaction_effect", value = FALSE)
       es_result(NULL)
     }
+
+    # ---- Auto-check interaction_effect when design = "interaction" ----
+    observeEvent(input$study_design, {
+      if (!is.null(input$study_design) && input$study_design == "interaction") {
+        updateCheckboxInput(session, "interaction_effect", value = TRUE)
+      }
+    })
+
+    # ---- When interaction_effect is unchecked, reset study_design if it was 'interaction' ----
+    observeEvent(input$interaction_effect, {
+      if (!isTRUE(input$interaction_effect)) {
+        if (!is.null(input$study_design) && input$study_design == "interaction") {
+          updateSelectInput(session, "study_design", selected = "")
+        }
+      }
+    }, ignoreInit = TRUE)
+
+    # ---- Study design dropdown (hidden when interaction_effect is checked) ----
+    output$study_design_panel <- renderUI({
+      is_interaction <- isTRUE(input$interaction_effect)
+
+      if (is_interaction) {
+        # Hide the regular study design dropdown; interaction pathway handles it
+        NULL
+      } else {
+        selectInput(ns("study_design"), "Study design",
+                    choices = .study_design_choices,
+                    selected = input$study_design %||% "")
+      }
+    })
 
     # ---- Design-specific conditional panels ----
     output$design_fields <- renderUI({
       design <- input$study_design %||% ""
       is_interaction <- isTRUE(input$interaction_effect)
+
+      # When interaction_effect is checked, show only the interaction pathway UI
+      if (is_interaction) {
+        return(.render_interaction_ui(ns))
+      }
 
       if (nchar(design) == 0) {
         return(p(class = "text-muted fst-italic small",
@@ -623,7 +664,7 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
             .render_regression_fields(ns)
           )
         },
-        "interaction"       = .render_interaction_ui(ns),
+        "interaction" = .render_interaction_ui(ns),
         p(class = "text-muted small", "Unknown study design.")
       )
     })
@@ -867,7 +908,9 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
     # ---- Collect all effect size inputs into a list for compute_effect_size ----
     collect_es_inputs <- function() {
       design <- input$study_design %||% ""
-      if (nchar(design) == 0) return(NULL)
+      is_interaction <- isTRUE(input$interaction_effect) || design == "interaction"
+
+      if (nchar(design) == 0 && !is_interaction) return(NULL)
 
       # General fields
       result <- list(
@@ -879,8 +922,8 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
         predictor_distribution   = input$predictor_distribution %||% "",
         predictor_variable_name  = input$predictor_variable_name %||% "",
         predictor_unit           = input$predictor_unit %||% "",
-        interaction_effect       = isTRUE(input$interaction_effect),
-        study_design             = design
+        interaction_effect       = is_interaction,
+        study_design             = if (is_interaction) "interaction" else design
       )
 
       # Time trend: use regression + set predictor_distribution = Time
@@ -888,17 +931,9 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
         result$predictor_distribution <- "Time"
       }
 
-      # Design-specific fields
-      if (design == "control_treatment") {
-        result <- c(result, .collect_ct_fields(""))
-
-      } else if (design == "correlation") {
-        result <- c(result, .collect_corr_fields(""))
-
-      } else if (design == "regression" || design == "time_trend") {
-        result <- c(result, .collect_regression_fields(""))
-
-      } else if (design == "interaction") {
+      # When interaction_effect is checked, collect interaction fields
+      # (these override any regular design fields for computation)
+      if (is_interaction) {
         pathway <- input$interaction_pathway %||% "A"
         result$interaction_pathway <- pathway
 
@@ -933,6 +968,15 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
 
           result$group_a <- group_a
           result$group_b <- group_b
+        }
+      } else {
+        # Design-specific fields (no interaction)
+        if (design == "control_treatment") {
+          result <- c(result, .collect_ct_fields(""))
+        } else if (design == "correlation") {
+          result <- c(result, .collect_corr_fields(""))
+        } else if (design == "regression" || design == "time_trend") {
+          result <- c(result, .collect_regression_fields(""))
         }
       }
 

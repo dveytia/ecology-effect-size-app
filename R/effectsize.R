@@ -270,9 +270,18 @@ es_regression <- function(input) {
 es_interaction_a <- function(input) {
   warnings <- character(0)
 
-  t_stat <- get_num(input, "t_stat")
-  df     <- get_num(input, "df")
-  n      <- get_num(input, "n")
+  t_stat           <- get_num(input, "t_stat")
+  df               <- get_num(input, "df")
+  n                <- get_num(input, "n")
+  interaction_term <- get_num(input, "interaction_term")
+  se_interaction   <- get_num(input, "se_interaction")
+
+  # Compute t from interaction_term / se_interaction if not provided directly
+  if (is.null(t_stat) && !is.null(interaction_term) && !is.null(se_interaction) &&
+      se_interaction != 0) {
+    t_stat <- interaction_term / se_interaction
+    warnings <- c(warnings, "t-statistic derived from interaction term / SE")
+  }
 
   if (!is.null(t_stat) && !is.null(df)) {
     r <- t_stat / sqrt(t_stat^2 + df)

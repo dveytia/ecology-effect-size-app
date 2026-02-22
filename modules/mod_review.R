@@ -406,14 +406,6 @@ mod_review_server <- function(id, project_id, session_rv) {
           )
         ),
 
-        # Effect size card (rendered outside label_form so
-        # group_instances changes don't destroy it)
-        div(class = "card mb-3",
-          div(class = "card-body p-0",
-            mod_effect_size_ui_ui(ns("effect_size_form"))
-          )
-        ),
-
         # Action buttons
         div(class = "d-flex gap-2 flex-wrap",
           actionButton(ns("btn_save"),
@@ -683,9 +675,8 @@ mod_review_server <- function(id, project_id, session_rv) {
         },
 
         "effect_size" = {
-          # Effect size form is now rendered separately outside label_form
-          div(class = "alert alert-light py-2 small mb-0",
-            icon("calculator"), " Effect size fields are in the card below.")
+          # Render the full effect size sub-form inline at this label's position
+          mod_effect_size_ui_ui(ns("effect_size_form"))
         },
 
         # Fallback

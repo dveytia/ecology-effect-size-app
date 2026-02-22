@@ -74,27 +74,30 @@ body {
 
 /* ---- Effect size pathway colour coding ------------------- */
 /* Pathway A – Primary (green tint) */
+.effect-size-block .es-pathway-a,
 .es-pathway-a {
-  border-left: 4px solid #4caf50;
-  background: rgba(76, 175, 80, 0.06);
+  border-left: 4px solid #4caf50 !important;
+  background: rgba(76, 175, 80, 0.06) !important;
   padding: 0.5rem 0.75rem;
   margin-bottom: 0.5rem;
   border-radius: 0 6px 6px 0;
 }
 
 /* Pathway B – Fallback 1 (blue tint) */
+.effect-size-block .es-pathway-b,
 .es-pathway-b {
-  border-left: 4px solid #2196f3;
-  background: rgba(33, 150, 243, 0.06);
+  border-left: 4px solid #2196f3 !important;
+  background: rgba(33, 150, 243, 0.06) !important;
   padding: 0.5rem 0.75rem;
   margin-bottom: 0.5rem;
   border-radius: 0 6px 6px 0;
 }
 
 /* Pathway C – Fallback 2 (amber tint) */
+.effect-size-block .es-pathway-c,
 .es-pathway-c {
-  border-left: 4px solid #ff9800;
-  background: rgba(255, 152, 0, 0.06);
+  border-left: 4px solid #ff9800 !important;
+  background: rgba(255, 152, 0, 0.06) !important;
   padding: 0.5rem 0.75rem;
   margin-bottom: 0.5rem;
   border-radius: 0 6px 6px 0;
@@ -121,13 +124,16 @@ body {
 }
 
 .es-legend-swatch.es-pathway-a {
-  border-left-width: 3px;
+  border-left: 3px solid #4caf50 !important;
+  background: rgba(76, 175, 80, 0.12) !important;
 }
 
 .es-legend-swatch.es-pathway-b {
-  border-left-width: 3px;
+  border-left: 3px solid #2196f3 !important;
+  background: rgba(33, 150, 243, 0.12) !important;
 }
 
 .es-legend-swatch.es-pathway-c {
-  border-left-width: 3px;
+  border-left: 3px solid #ff9800 !important;
+  background: rgba(255, 152, 0, 0.12) !important;
 }
