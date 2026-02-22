@@ -283,4 +283,10 @@ sb_auth_refresh <- function(refresh_token) {
 }
 
 # Null-coalescing operator (base R does not have one)
-`%||%` <- function(a, b) if (!is.null(a) && !is.na(a) && nchar(as.character(a)) > 0) a else b
+# Safe for lists and non-scalar values: only apply NA/nchar checks to scalars.
+`%||%` <- function(a, b) {
+  if (is.null(a)) return(b)
+  if (is.list(a) || length(a) != 1L) return(a)
+  if (is.na(a) || nchar(as.character(a)) == 0L) return(b)
+  a
+}

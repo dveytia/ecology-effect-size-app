@@ -124,11 +124,15 @@ mod_project_home_server <- function(id, project_id, session_rv, app_state) {
       )
     }
 
-    # ---- Render tab stubs ----------------------------------
+    # ---- Review tab (Phase 7) --------------------------------
     output$review_tab <- renderUI({
       req(project_id())
-      .stub_tab(7, "Review Interface", "book-open")
+      mod_review_ui(ns("review"))
     })
+
+    mod_review_server("review",
+                      project_id = project_id,
+                      session_rv = session_rv)
 
     output$labels_tab <- renderUI({
       req(project_id())
