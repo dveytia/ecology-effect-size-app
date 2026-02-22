@@ -326,3 +326,11 @@ CREATE POLICY auditlog_insert ON public.audit_log
     user_id = public.current_user_id()
     AND public.user_can_access_project(project_id)
   );
+
+-- ============================================================
+-- Verification: list all policies to confirm TO authenticated
+-- ============================================================
+SELECT tablename, policyname, permissive, roles, cmd
+FROM   pg_policies
+WHERE  schemaname = 'public'
+ORDER BY tablename, policyname;
