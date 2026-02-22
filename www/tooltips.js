@@ -1,7 +1,9 @@
 // www/tooltips.js — Bootstrap 5 tooltip initialisation
 // ============================================================
-// Called automatically on page load (and re-triggered by Shiny
-// after each renderUI via the Shiny.addCustomMessageHandler below).
+// Tooltips are attached to clickable question-mark icons (tooltip-icon class).
+// Each icon carries data-bs-trigger="click" so the tooltip opens/closes on
+// click rather than hover.  Clicking anywhere outside an open tooltip
+// dismisses it.
 
 // Initialise all Bootstrap tooltips present in the DOM
 function initTooltips() {
@@ -10,11 +12,24 @@ function initTooltips() {
   );
   tooltipTriggerList.forEach(function (el) {
     // Avoid double-initialisation
-    if (!el._tippy && !el._tooltip) {
-      new bootstrap.Tooltip(el, { trigger: 'hover focus' });
+    if (!bootstrap.Tooltip.getInstance(el)) {
+      // Respect the per-element data-bs-trigger attribute (defaults to click
+      // for tooltip-icon elements; Bootstrap reads it automatically when no
+      // explicit override is provided here).
+      new bootstrap.Tooltip(el);
     }
   });
 }
+
+// Dismiss any open click-triggered tooltip when the user clicks outside it
+document.addEventListener('click', function (e) {
+  document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
+    var instance = bootstrap.Tooltip.getInstance(el);
+    if (instance && !el.contains(e.target)) {
+      instance.hide();
+    }
+  });
+}, true);
 
 // Run on initial page load
 document.addEventListener('DOMContentLoaded', function () {

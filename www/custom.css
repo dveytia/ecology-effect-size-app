@@ -62,9 +62,21 @@ body {
 }
 
 /* ---- Tooltips -------------------------------------------- */
-[data-bs-toggle="tooltip"] {
-  cursor: help;
-  border-bottom: 1px dashed #adb5bd;
+/* Question-mark icon that triggers a click tooltip */
+.tooltip-icon {
+  cursor: pointer;
+  color: #6c757d;
+  font-size: 0.8em;
+  vertical-align: middle;
+  opacity: 0.75;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.tooltip-icon:hover,
+.tooltip-icon:focus {
+  opacity: 1;
+  color: #0d6efd;
+  outline: none;
 }
 
 /* ---- Audit log ------------------------------------------- */
