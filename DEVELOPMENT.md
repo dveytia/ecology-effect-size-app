@@ -154,8 +154,7 @@ Create 3 single labels (text, select one, boolean), 1 group with 2 children, 1 e
 
 **Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
-Note: check that location label with OpenStreetMap API works.
-**Status:** [x] Not started  [ ] In progress  [ ] Gate passed
+
 ---
 
 ## Phase 5: Article Upload
@@ -218,7 +217,7 @@ Create public Drive folder. Add 3 valid PDFs + 1 invalid name. Paste URL, click 
 - `modules/mod_review.R` — full implementation
 
 **Validation Gate 7:**
-Review 3 articles end-to-end (all labels, label group with 3 instances, skip). Reload and verify data persisted. Two reviewers open same article simultaneously; second save receives conflict warning.
+Review 3 articles end-to-end (all labels, label group with 3 instances, skip). Verify with label types: text, select one, select multiple, boolean, openstreetmap_location. Reload and verify data persisted. Two reviewers open same article simultaneously; second save receives conflict warning.
 
 **Status:** [ ] Not started
 
@@ -233,7 +232,7 @@ Review 3 articles end-to-end (all labels, label group with 3 instances, skip). R
 - `tests/test_effectsize.R` — all 11 unit tests passing
 
 **Validation Gate 8:**
-`devtools::test()` → 0 failures. Hand-calculate Pathway B difference-in-differences and verify against app output.
+`devtools::test()` → 0 failures. Hand-calculate Pathway B difference-in-differences and verify against app output. Also test effect size calculations for other types of study methods to verify.
 
 **Status:** [ ] Not started
 
