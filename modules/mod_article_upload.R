@@ -24,7 +24,10 @@ mod_article_upload_ui <- function(id) {
             div(class = "card-header fw-semibold",
                 icon("info-circle"), " CSV Format Requirements"),
             div(class = "card-body",
-              p("Upload a comma-separated (CSV) file in UTF-8 encoding."),
+              p("Upload a comma-separated (CSV) or tab-delimited (TSV/TXT) file in UTF-8 encoding."),
+              p(class = "text-muted small",
+                icon("lightbulb"),
+                " Tab-delimited files are recommended when article titles or abstracts contain commas."),
               tags$table(class = "table table-sm",
                 tags$thead(
                   tags$tr(tags$th("Column"), tags$th("Required"), tags$th("Notes"))
@@ -39,7 +42,7 @@ mod_article_upload_ui <- function(id) {
               ),
               p(class = "text-muted small mb-0",
                 icon("exclamation-triangle"),
-                " Non-UTF-8 files will be rejected with a re-save prompt.")
+                " Non-UTF-8 files will be rejected with a re-save prompt. Delimiter is auto-detected.")
             )
           ),
 
@@ -50,7 +53,8 @@ mod_article_upload_ui <- function(id) {
             div(class = "card-body",
               fileInput(ns("csv_file"),
                         label    = NULL,
-                        accept   = c(".csv", "text/csv", "text/plain"),
+                        accept   = c(".csv", ".tsv", ".txt",
+                                     "text/csv", "text/tab-separated-values", "text/plain"),
                         multiple = FALSE,
                         buttonLabel = "Browse\u2026",
                         placeholder = "No file selected"),
@@ -85,8 +89,9 @@ mod_article_upload_server <- function(id, project_id, session_rv,
       req(input$csv_file)
       req(project_id(), session_rv$token)
       path <- input$csv_file$datapath
+      fname_orig <- input$csv_file$name
       tryCatch({
-        df   <- read_upload_csv(path)
+        df   <- read_upload_file(path, filename = fname_orig)
         miss <- validate_upload_columns(df)
         if (length(miss) > 0) {
           stop(paste("Missing required column(s):", paste(miss, collapse = ", ")))

@@ -169,33 +169,60 @@ validate_upload_columns <- function(df) {
 }
 
 
-#' Read and normalise an uploaded CSV file
+#' Read and normalise an uploaded delimited file (CSV or TSV)
 #'
-#' Detects encoding (requires readr), renames columns to lowercase,
-#' and returns a data frame with the required columns present.
+#' Auto-detects the delimiter: files ending in .tsv or .txt, or whose first
+#' line contains a tab character, are read as tab-delimited. All others are
+#' read as comma-delimited. Encoding is checked and must be UTF-8.
 #'
-#' @param path  Path to the uploaded file (from input$file$datapath)
-#' @return      Normalised data frame, or stops with a user-friendly message
-read_upload_csv <- function(path) {
-  # Encoding check
+#' @param path      Path to the uploaded file (from input$file$datapath)
+#' @param filename  Original filename (used for extension detection; optional)
+#' @return          Normalised data frame, or stops with a user-friendly message
+read_upload_file <- function(path, filename = NULL) {
+  # ---- Encoding check ------------------------------------
   enc_guess <- tryCatch(
     readr::guess_encoding(path),
     error = function(e) data.frame(encoding = "UTF-8", confidence = 1)
   )
   top_enc <- if (nrow(enc_guess) > 0) enc_guess$encoding[1] else "UTF-8"
-  if (!grepl("utf-?8", top_enc, ignore.case = TRUE)) {
+  # ASCII is a strict subset of UTF-8 — both are safe to read without conversion
+  if (!grepl("utf-?8|ascii", top_enc, ignore.case = TRUE)) {
     stop(paste0(
       "Non-UTF-8 encoding detected (", top_enc, "). ",
-      "Please re-save your CSV as UTF-8 before uploading."
+      "Please re-save your file as UTF-8 before uploading."
     ))
   }
 
-  df <- tryCatch(
-    readr::read_csv(path, show_col_types = FALSE),
-    error = function(e) stop(paste("Could not read CSV:", e$message))
-  )
+  # ---- Delimiter detection --------------------------------
+  # 1. Extension hint (from original filename when available)
+  ext_tab <- !is.null(filename) &&
+               grepl("\\.tsv$|\\.txt$", filename, ignore.case = TRUE)
 
-  # Lowercase all column names for consistency
+  # 2. Sniff first line for a tab character
+  first_line <- tryCatch({
+    con <- file(path, open = "r", encoding = "UTF-8")
+    on.exit(close(con), add = TRUE)
+    readLines(con, n = 1L, warn = FALSE)
+  }, error = function(e) "")
+  sniff_tab <- grepl("\t", first_line, fixed = TRUE)
+
+  use_tab <- ext_tab || sniff_tab
+
+  # ---- Parse -----------------------------------------------
+  df <- tryCatch({
+    if (use_tab)
+      readr::read_tsv(path, show_col_types = FALSE)
+    else
+      readr::read_csv(path, show_col_types = FALSE)
+  }, error = function(e) {
+    fmt <- if (use_tab) "TSV" else "CSV"
+    stop(paste0("Could not read ", fmt, " file: ", e$message))
+  })
+
+  # ---- Normalise column names ------------------------------
   names(df) <- tolower(names(df))
   df
 }
+
+# Backward-compatible alias kept for any external callers / tests
+read_upload_csv <- read_upload_file
