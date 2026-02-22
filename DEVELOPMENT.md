@@ -195,17 +195,32 @@ Upload 20 articles. Upload second CSV with 2 exact DOI duplicates, 1 title-year 
 
 ## Phase 6: Google Drive Integration
 
-**Branch:** `phase-6-gdrive`
+**Branch:** `phase-6-google-drive`
 
 **Deliverables:**
-- `R/gdrive.R` — full implementation
-- Drive folder URL field in Edit Project modal
-- Sync Now button and summary display
+- `R/gdrive.R` — full implementation ✅
+- Drive folder URL field in Edit Project modal ✅
+- Sync Now button and summary display ✅
+- `sql/07_gdrive_columns.sql` — schema migration ✅
 
 **Validation Gate 6:**
 Create public Drive folder. Add 3 valid PDFs + 1 invalid name. Paste URL, click Sync. Verify pdf_drive_link populated for 3 articles, 1 skipped in summary.
 
-**Status:** [ ] Not started
+**Pre-flight — run `sql/07_gdrive_columns.sql` in Supabase SQL Editor before testing Gate 6.**
+
+**Implementation notes:**
+- `R/gdrive.R` implements four functions: `gdrive_init_oauth()` (one-time interactive auth), `gdrive_init()` (load cached token at startup), `gdrive_list_pdfs()` (Drive API v3 via `httr2`), `sync_drive_folder()` (match + upsert loop).
+- PDF files must be named `[article_num].pdf` where `article_num` is the integer column added to `articles` by `sql/07_gdrive_columns.sql`. Existing articles are back-filled automatically.
+- `global.R` calls `gdrive_init()` at app startup. If no token is cached, Drive features are silently disabled — the app continues to work normally.
+- The **Edit Project** modal now has a Drive Folder URL text input, a "Last synced" timestamp, and a **Sync Now** inline button. The URL and `drive_folder_id` are saved to the `projects` row when **Save Changes** is clicked, or immediately when **Sync Now** is pressed (so sync can run even without clicking Save).
+- Sync result is displayed inline in the modal: files found / matched / skipped, with skipped filenames listed for naming-error diagnosis.
+- Pagination is handled in `gdrive_list_pdfs()` via `nextPageToken` loop (supports folders with > 1 000 PDFs).
+- `gdrive_is_authed()` helper checks token availability; functions fail gracefully with an instructive error if not authed.
+- `gargle` is a dependency of `googledrive`; no separate install needed.
+
+**Google Drive setup — one-time steps (human action required, see below):**
+
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
 
@@ -291,6 +306,7 @@ Reviewer JWT cannot access another project's articles directly (API returns 403)
 | 2026-02-21 | Phase 1 scaffold initialised | All stubs created; SQL ready to run |
 | 2026-02-21 | Phase 2 authentication implemented | `R/auth.R` refresh/guard fully implemented; `server.R` gains `refresh_token` field and 30 s auto-refresh timer |
 | 2026-02-21 | Phase 3 dashboard & projects implemented | Full project CRUD, invite/leave membership, project home with tab stubs. `sb_delete_where` added to `R/supabase.R`. `server.R` updated to three-state page router. `mod_project_home_server` now receives `app_state`. Run `sql/02_rls_policies.sql` before Gate 3 validation. |
+| 2026-02-22 | Phase 6 Google Drive integration implemented | `R/gdrive.R` fully implemented; `sql/07_gdrive_columns.sql` adds `article_num` to articles and ensures Drive columns exist on projects. Edit Project modal gains Drive URL + Sync Now. `global.R` calls `gdrive_init()` at startup. |
 
 ---
 
