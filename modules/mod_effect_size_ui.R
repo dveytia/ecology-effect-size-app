@@ -334,11 +334,42 @@ mod_effect_size_ui_ui <- function(id) {
   p <- function(x) ns(paste0(prefix, x))
   tagList(
     .pathway_legend(list(
-      "Primary: t-stat + df \u2192 r"                   = "es-pathway-a",
-      "Fallback: \u03b2 \u00d7 (SD_X / SD_Y) \u2192 r" = "es-pathway-b"
+      "Primary: std \u03b2 \u2192 r; or unstd \u03b2 \u00d7 (SD_X / SD_Y) \u2192 r" = "es-pathway-a",
+      "Fallback 1: t-stat + df \u2192 r; or \u03b2 / SE \u2192 t \u2192 r"          = "es-pathway-b",
+      "Fallback 2: \u03b2 + p + N \u2192 t \u2192 r"                                  = "es-pathway-c"
     )),
-    # Primary: t-stat path
+    # Beta type selector + beta value
+    div(class = "row g-2",
+      div(class = "col-md-4",
+        selectInput(p("beta_type"), tags$span("\u03b2 type",
+          title = "Standardised \u03b2 is unitless (reported as 'standardised' in the paper). Unstandardised \u03b2 has the same units as the response variable."),
+          choices = c(
+            "-- select --"     = "",
+            "Standardised"     = "standardized",
+            "Unstandardised"   = "unstandardized"
+          ))
+      ),
+      div(class = "col-md-4",
+        numericInput(p("beta"), "Regression coefficient (\u03b2)",
+                     value = NA_real_)
+      ),
+      div(class = "col-md-4",
+        numericInput(p("n"), "Sample size (n)", value = NA_integer_, step = 1)
+      )
+    ),
+    # Primary pathway: beta + SDs (for unstandardised)
     div(class = "es-pathway-a",
+      div(class = "row g-2",
+        div(class = "col-md-6",
+          numericInput(p("sd_X"), "SD of predictor", value = NA_real_)
+        ),
+        div(class = "col-md-6",
+          numericInput(p("sd_Y"), "SD of response", value = NA_real_)
+        )
+      )
+    ),
+    # Fallback 1: t-stat + df; or beta/SE -> t
+    div(class = "es-pathway-b",
       div(class = "row g-2",
         div(class = "col-md-4",
           numericInput(p("t_stat"),
@@ -349,42 +380,52 @@ mod_effect_size_ui_ui <- function(id) {
         div(class = "col-md-4",
           numericInput(p("df"),
                        tags$span("Residual df",
-                         title = 'Look for df in regression output. For F(1, 45), use 45 (the second number).'),
+                         title = 'Look for df in regression output. For F(1, 45), use 45 (the second number). Simple regression: df = N \u2212 2. Multiple regression: df = N \u2212 k \u2212 1.'),
                        value = NA_real_)
         ),
         div(class = "col-md-4",
-          numericInput(p("n"), "Sample size (n)", value = NA_integer_, step = 1)
+          numericInput(p("se_beta"),
+                       tags$span("SE of \u03b2",
+                         title = "Standard error of the coefficient. Used to derive t = \u03b2 / SE when t is not reported."),
+                       value = NA_real_)
         )
       )
     ),
-    # Fallback: beta + SDs
-    div(class = "es-pathway-b",
+    # Fallback 2: p-value path
+    div(class = "es-pathway-c",
       div(class = "row g-2",
-        div(class = "col-md-4",
-          numericInput(p("beta"), "Regression coefficient (\u03b2)",
+        div(class = "col-md-6",
+          numericInput(p("p_value"),
+                       tags$span("p-value",
+                         title = "p-value for the coefficient. Used to recover t when t and SE are not available."),
                        value = NA_real_)
-        ),
-        div(class = "col-md-4",
-          numericInput(p("sd_X"), "SD of predictor", value = NA_real_)
-        ),
-        div(class = "col-md-4",
-          numericInput(p("sd_Y"), "SD of response", value = NA_real_)
         )
       )
     ),
-    # Additional fields (not pathway-specific)
-    div(class = "row g-2",
-      div(class = "col-md-4",
-        numericInput(p("se_beta"), "SE of \u03b2", value = NA_real_)
-      ),
-      div(class = "col-md-4",
-        numericInput(p("p_value"), "p-value", value = NA_real_)
-      )
-    ),
+    # Multiple predictors toggle + number of predictors
     checkboxInput(p("multiple_predictors"),
                   tags$span("Multiple predictors",
-                    title = "Check if the model contains more than one predictor"),
-                  value = FALSE)
+                    title = "Check if the model contains more than one predictor. Effect will be flagged as partial correlation."),
+                  value = FALSE),
+    conditionalPanel(
+      condition = paste0("input['", p("multiple_predictors"), "'] == true"),
+      div(class = "row g-2 mb-2",
+        div(class = "col-md-4",
+          numericInput(p("n_predictors"),
+                       tags$span("Number of predictors (k)",
+                         title = "Number of predictors in the model. Used to compute df = N \u2212 k \u2212 1 when df is not reported directly."),
+                       value = NA_integer_, min = 2, step = 1)
+        ),
+        div(class = "col-md-8",
+          div(class = "alert alert-info py-2 small mb-0 mt-4",
+            icon("info-circle"),
+            " Multiple regression produces a ",
+            tags$strong("partial correlation"),
+            ", not a zero-order r. Standardised \u03b2 alone cannot be converted; provide t, SE, or p-value."
+          )
+        )
+      )
+    )
   )
 }
 
@@ -498,6 +539,8 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
             z               = row$z,
             var_z           = row$var_z,
             effect_status   = row$effect_status,
+            effect_type     = if (!is.null(row$effect_type)) row$effect_type
+                              else "zero_order",
             effect_warnings = if (is.character(row$effect_warnings))
                                 row$effect_warnings
                               else if (is.list(row$effect_warnings))
@@ -523,10 +566,10 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
           updateCheckboxInput(session, input_id, value = isTRUE(val))
         } else {
           # Try to detect the input type from known IDs
-          if (grepl("^(study_design|study_method|response_scale|response_distribution|predictor_distribution|var_statistic_type|interaction_pathway|grpA_study_design|grpB_study_design)$", input_id) ||
-              grepl("^grp[AB]_var_statistic_type$", input_id)) {
+          if (grepl("^(study_design|study_method|response_scale|response_distribution|predictor_distribution|var_statistic_type|interaction_pathway|grpA_study_design|grpB_study_design|beta_type)$", input_id) ||
+              grepl("^grp[AB]_(var_statistic_type|beta_type)$", input_id)) {
             updateSelectInput(session, input_id, selected = val)
-          } else if (grepl("(mean_|var_value_|n_control|n_treatment|t_stat|F_stat|chi_square|p_value|df|r_reported|se_r|covariance|sd_X|sd_Y|beta|se_beta|interaction_term|se_interaction|^n$)", input_id)) {
+          } else if (grepl("(mean_|var_value_|n_control|n_treatment|t_stat|F_stat|chi_square|p_value|df|r_reported|se_r|covariance|sd_X|sd_Y|beta|se_beta|interaction_term|se_interaction|n_predictors|^n$)", input_id)) {
             updateNumericInput(session, input_id, value = as.numeric(val))
           } else {
             updateTextInput(session, input_id, value = val)
@@ -567,6 +610,7 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
         .update_input_safe(paste0(prefix, "df"),            raw$df)
       } else if (design == "regression") {
         .update_input_safe(paste0(prefix, "beta"),                raw$beta)
+        .update_input_safe(paste0(prefix, "beta_type"),           raw$beta_type)
         .update_input_safe(paste0(prefix, "se_beta"),             raw$se_beta)
         .update_input_safe(paste0(prefix, "n"),                   raw$n)
         .update_input_safe(paste0(prefix, "t_stat"),              raw$t_stat)
@@ -575,6 +619,7 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
         .update_input_safe(paste0(prefix, "sd_X"),                raw$sd_X)
         .update_input_safe(paste0(prefix, "sd_Y"),                raw$sd_Y)
         .update_input_safe(paste0(prefix, "multiple_predictors"), raw$multiple_predictors)
+        .update_input_safe(paste0(prefix, "n_predictors"),        raw$n_predictors)
       }
     }
 
@@ -858,6 +903,15 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
           span(class = "badge bg-secondary", status)
         )
 
+        # Show effect type (zero-order vs partial)
+        etype <- res$effect_type %||% "zero_order"
+        etype_badge <- if (etype == "partial") {
+          span(class = "badge bg-warning text-dark ms-1", "Partial r")
+        } else {
+          NULL
+        }
+
+        r_label <- if (etype == "partial") "Partial r" else "Pearson r"
         r_fmt    <- if (!is.null(res$r))     sprintf("%.4f", res$r)     else "NA"
         z_fmt    <- if (!is.null(res$z))     sprintf("%.4f", res$z)     else "NA"
         vz_fmt   <- if (!is.null(res$var_z)) sprintf("%.4f", res$var_z) else "NA"
@@ -867,14 +921,15 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
             div(class = "d-flex align-items-center gap-2",
               icon("check-circle", class = "text-success"),
               strong("Computed Effect Size"),
-              status_badge
+              status_badge,
+              etype_badge
             )
           ),
           div(class = "card-body py-2",
             div(class = "row g-2",
               div(class = "col-md-4",
                 tags$dl(class = "mb-0",
-                  tags$dt(class = "small text-muted", "Pearson r"),
+                  tags$dt(class = "small text-muted", r_label),
                   tags$dd(class = "fs-5 fw-bold mb-0", r_fmt)
                 )
               ),
@@ -1027,6 +1082,7 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
     .collect_regression_fields <- function(prefix) {
       list(
         beta                = .safe_num(input[[paste0(prefix, "beta")]]),
+        beta_type           = input[[paste0(prefix, "beta_type")]] %||% "",
         se_beta             = .safe_num(input[[paste0(prefix, "se_beta")]]),
         n                   = .safe_num(input[[paste0(prefix, "n")]]),
         t_stat              = .safe_num(input[[paste0(prefix, "t_stat")]]),
@@ -1034,7 +1090,8 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
         df                  = .safe_num(input[[paste0(prefix, "df")]]),
         sd_X                = .safe_num(input[[paste0(prefix, "sd_X")]]),
         sd_Y                = .safe_num(input[[paste0(prefix, "sd_Y")]]),
-        multiple_predictors = isTRUE(input[[paste0(prefix, "multiple_predictors")]])
+        multiple_predictors = isTRUE(input[[paste0(prefix, "multiple_predictors")]]),
+        n_predictors        = .safe_num(input[[paste0(prefix, "n_predictors")]])
       )
     }
 
@@ -1102,6 +1159,7 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
           z                = computed$z,
           var_z            = computed$var_z,
           effect_status    = computed$effect_status %||% "insufficient_data",
+          effect_type      = computed$effect_type %||% "zero_order",
           effect_warnings  = if (length(computed$effect_warnings) > 0)
                                as.list(computed$effect_warnings)
                              else list(),

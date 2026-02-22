@@ -68,6 +68,7 @@ compute_effect_size <- function(input_list) {
 
   r        <- res$r
   warnings <- res$warnings %||% character(0)
+  effect_type <- res$effect_type %||% "zero_order"
 
   # Pathway B returns pre-computed z / var_z; use them directly
   if (!is.null(res$z)) {
@@ -99,7 +100,8 @@ compute_effect_size <- function(input_list) {
     z               = z,
     var_z           = var_z,
     effect_status   = status,
-    effect_warnings = warnings
+    effect_warnings = warnings,
+    effect_type     = effect_type
   )
 }
 
@@ -234,36 +236,163 @@ es_correlation <- function(input) {
 }
 
 #' Regression (and time trend) design
-#' Pathway: t-stat → beta × (sd_X / sd_Y).
+#' Pathways vary by simple vs multiple regression:
+#'
+#' Simple regression (multiple_predictors = FALSE):
+#'   1. Standardised beta: r = beta
+#'   2. Unstandardised beta + SDs: r = beta * (sd_X / sd_Y)
+#'   3. t-stat + df: r = t / sqrt(t^2 + df)
+#'   4. beta + SE -> t -> r (df = N - 2)
+#'   5. beta + p-value + N -> recover t -> r (df = N - 2)
+#'
+#' Multiple regression (multiple_predictors = TRUE):
+#'   1. t-stat + df: r_partial = t / sqrt(t^2 + df)
+#'   2. beta + SE -> t -> r_partial (df = N - k - 1)
+#'   3. beta + p + N + k -> recover t -> r_partial
+#'   4. Unstandardised beta + SDs: approximate r_partial
+#'   ✗ Standardised beta alone: cannot convert
 es_regression <- function(input) {
   warnings <- character(0)
 
-  beta   <- get_num(input, "beta")
-  n      <- get_num(input, "n")
-  t_stat <- get_num(input, "t_stat")
-  df     <- get_num(input, "df")
-  sd_x   <- get_num(input, "sd_X")
-  sd_y   <- get_num(input, "sd_Y")
-  multi  <- isTRUE(input$multiple_predictors)
+  beta      <- get_num(input, "beta")
+  beta_type <- input$beta_type %||% "unstandardized"
+  n         <- get_num(input, "n")
+  t_stat    <- get_num(input, "t_stat")
+  df        <- get_num(input, "df")
+  sd_x      <- get_num(input, "sd_X")
+  sd_y      <- get_num(input, "sd_Y")
+  se_beta   <- get_num(input, "se_beta")
+  p_value   <- get_num(input, "p_value")
+  multi     <- isTRUE(input$multiple_predictors)
+  k         <- get_num(input, "n_predictors")  # number of predictors
 
+  # Determine effect type
+
+  effect_type <- if (multi) "partial" else "zero_order"
   if (multi) warnings <- c(warnings, "Partial r from multiple predictor model")
 
-  if (!is.null(t_stat) && !is.null(df)) {
-    r <- t_stat / sqrt(t_stat^2 + df)
-    return(list(r = r, n = n, se_r = NULL,
-                status = "calculated", warnings = warnings))
-  }
+  # ---- Simple regression pathways ----
+  if (!multi) {
 
-  if (!is.null(beta) && !is.null(sd_x) && !is.null(sd_y) && sd_y > 0) {
-    r <- beta * (sd_x / sd_y)
-    if (multi) warnings <- c(warnings,
-      "Partial r approximated from beta \u00d7 (sd_X / sd_Y)")
-    return(list(r = r, n = n, se_r = NULL,
-                status = "calculated", warnings = warnings))
+    # Pathway 1: Standardised beta -> r = beta
+    if (!is.null(beta) && beta_type == "standardized") {
+      return(list(r = beta, n = n, se_r = NULL,
+                  status = "calculated", warnings = warnings,
+                  effect_type = effect_type))
+    }
+
+    # Pathway 2: Unstandardised beta + SDs -> r = beta * (sd_X / sd_Y)
+    if (!is.null(beta) && !is.null(sd_x) && !is.null(sd_y) && sd_y > 0) {
+      r <- beta * (sd_x / sd_y)
+      return(list(r = r, n = n, se_r = NULL,
+                  status = "calculated", warnings = warnings,
+                  effect_type = effect_type))
+    }
+
+    # Pathway 5 (prioritised): t-stat + df -> r
+    if (!is.null(t_stat) && !is.null(df)) {
+      r <- t_stat / sqrt(t_stat^2 + df)
+      return(list(r = r, n = n, se_r = NULL,
+                  status = "calculated", warnings = warnings,
+                  effect_type = effect_type))
+    }
+
+    # Pathway 3: beta + SE -> derive t -> r
+    if (!is.null(beta) && !is.null(se_beta) && se_beta != 0) {
+      t_derived <- beta / se_beta
+      df_val <- df %||% (if (!is.null(n)) n - 2 else NULL)
+      if (!is.null(df_val) && df_val > 0) {
+        r <- t_derived / sqrt(t_derived^2 + df_val)
+        warnings <- c(warnings, "t-statistic derived from \u03b2 / SE(\u03b2)")
+        return(list(r = r, n = n, se_r = NULL,
+                    status = "calculated", warnings = warnings,
+                    effect_type = effect_type))
+      }
+    }
+
+    # Pathway 4: beta + p-value + N -> recover t -> r
+    if (!is.null(beta) && !is.null(p_value) && !is.null(n) && p_value > 0 && p_value < 1) {
+      df_val <- df %||% (n - 2)
+      if (df_val > 0) {
+        t_recovered <- stats::qt(1 - p_value / 2, df_val)
+        t_recovered <- sign(beta) * abs(t_recovered)
+        r <- t_recovered / sqrt(t_recovered^2 + df_val)
+        warnings <- c(warnings, "t-statistic recovered from p-value")
+        return(list(r = r, n = n, se_r = NULL,
+                    status = "calculated", warnings = warnings,
+                    effect_type = effect_type))
+      }
+    }
+
+  } else {
+    # ---- Multiple regression pathways ----
+
+    # Pathway 1: t-stat + df -> r_partial
+    if (!is.null(t_stat) && !is.null(df)) {
+      r <- t_stat / sqrt(t_stat^2 + df)
+      return(list(r = r, n = n, se_r = NULL,
+                  status = "calculated", warnings = warnings,
+                  effect_type = effect_type))
+    }
+
+    # Pathway 2: beta + SE -> derive t -> r_partial
+    if (!is.null(beta) && !is.null(se_beta) && se_beta != 0) {
+      t_derived <- beta / se_beta
+      # df: use reported df, else derive from N - k - 1
+      df_val <- df
+      if (is.null(df_val) && !is.null(n) && !is.null(k)) {
+        df_val <- n - k - 1
+      }
+      if (!is.null(df_val) && df_val > 0) {
+        r <- t_derived / sqrt(t_derived^2 + df_val)
+        warnings <- c(warnings, "t-statistic derived from \u03b2 / SE(\u03b2)")
+        return(list(r = r, n = n, se_r = NULL,
+                    status = "calculated", warnings = warnings,
+                    effect_type = effect_type))
+      }
+    }
+
+    # Pathway 3: beta + p-value + N + k -> recover t -> r_partial
+    if (!is.null(beta) && !is.null(p_value) && p_value > 0 && p_value < 1) {
+      df_val <- df
+      if (is.null(df_val) && !is.null(n) && !is.null(k)) {
+        df_val <- n - k - 1
+      }
+      if (!is.null(df_val) && df_val > 0) {
+        t_recovered <- stats::qt(1 - p_value / 2, df_val)
+        t_recovered <- sign(beta) * abs(t_recovered)
+        r <- t_recovered / sqrt(t_recovered^2 + df_val)
+        warnings <- c(warnings, "t-statistic recovered from p-value")
+        return(list(r = r, n = n, se_r = NULL,
+                    status = "calculated", warnings = warnings,
+                    effect_type = effect_type))
+      }
+    }
+
+    # Pathway 4: Unstandardised beta + SDs (approximation)
+    if (!is.null(beta) && beta_type != "standardized" &&
+        !is.null(sd_x) && !is.null(sd_y) && sd_y > 0) {
+      r <- beta * (sd_x / sd_y)
+      warnings <- c(warnings,
+        "Partial r approximated from \u03b2 \u00d7 (SD_X / SD_Y) in multiple regression; interpret with caution")
+      return(list(r = r, n = n, se_r = NULL,
+                  status = "calculated", warnings = warnings,
+                  effect_type = effect_type))
+    }
+
+    # Cannot convert standardised beta from multiple regression
+    if (!is.null(beta) && beta_type == "standardized") {
+      warnings <- c(warnings,
+        "Standardised \u03b2 from multiple regression cannot be directly converted to r; provide t-stat, SE, or p-value instead")
+      return(list(r = NULL, n = n, se_r = NULL,
+                  status = "insufficient_data", warnings = warnings,
+                  effect_type = effect_type))
+    }
   }
 
   list(r = NULL, n = n, se_r = NULL,
-       status = "insufficient_data", warnings = warnings)
+       status = "insufficient_data", warnings = warnings,
+       effect_type = effect_type)
 }
 
 #' Interaction Pathway A: explicit interaction term

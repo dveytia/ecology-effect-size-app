@@ -91,18 +91,116 @@ test_that("Covariance path: cov=0.6, sd_X=1.2, sd_Y=2.0 -> r=0.2500", {
 })
 
 # ============================================================
-# Test 5 — Regression + SDs
-# beta=0.4, sd_X=1.5, sd_Y=2.0  →  r=0.3000
+# Test 5 — Regression: unstandardised beta + SDs (simple)
+# beta=0.4, sd_X=1.5, sd_Y=2.0  →  r=0.3000 (zero-order)
 # ============================================================
 test_that("Regression beta + SDs: beta=0.4, sd_X=1.5, sd_Y=2.0 -> r=0.3000", {
   result <- compute_effect_size(list(
     study_design = "regression",
     beta         = 0.4,
+    beta_type    = "unstandardized",
     sd_X         = 1.5,
     sd_Y         = 2.0
   ))
   expect_equal(round(result$r, 4), 0.3000)
   expect_equal(result$effect_status, "calculated")
+  expect_equal(result$effect_type, "zero_order")
+})
+
+# ============================================================
+# Test 5a — Regression: standardised beta (simple)
+# beta=0.35, standardized  →  r=0.35 (zero-order)
+# ============================================================
+test_that("Std beta simple regression: r = beta directly", {
+  result <- compute_effect_size(list(
+    study_design = "regression",
+    beta         = 0.35,
+    beta_type    = "standardized",
+    multiple_predictors = FALSE
+  ))
+  expect_equal(result$r, 0.35)
+  expect_equal(result$effect_status, "calculated")
+  expect_equal(result$effect_type, "zero_order")
+})
+
+# ============================================================
+# Test 5b — Regression: beta + SE (simple, derive t)
+# beta=1.5, se_beta=0.6, n=32  →  t=2.5, df=30, r≈0.4152
+# ============================================================
+test_that("Beta + SE simple regression: derive t -> r", {
+  result <- compute_effect_size(list(
+    study_design = "regression",
+    beta         = 1.5,
+    se_beta      = 0.6,
+    n            = 32,
+    beta_type    = "unstandardized",
+    multiple_predictors = FALSE
+  ))
+  t_derived <- 1.5 / 0.6   # 2.5
+  df_val    <- 32 - 2       # 30
+  expected_r <- t_derived / sqrt(t_derived^2 + df_val)
+  expect_equal(round(result$r, 4), round(expected_r, 4))
+  expect_equal(result$effect_status, "calculated")
+  expect_equal(result$effect_type, "zero_order")
+  expect_true(any(grepl("derived from", result$effect_warnings)))
+})
+
+# ============================================================
+# Test 5c — Regression: beta + p-value + N (simple)
+# beta=1.5, p_value=0.019, n=32  →  recover t, r (zero-order)
+# ============================================================
+test_that("Beta + p + N simple regression: recover t -> r", {
+  result <- compute_effect_size(list(
+    study_design = "regression",
+    beta         = 1.5,
+    p_value      = 0.019,
+    n            = 32,
+    beta_type    = "unstandardized",
+    multiple_predictors = FALSE
+  ))
+  df_val    <- 32 - 2
+  t_recov   <- stats::qt(1 - 0.019 / 2, df_val)
+  expected_r <- t_recov / sqrt(t_recov^2 + df_val)
+  expect_equal(round(result$r, 4), round(expected_r, 4))
+  expect_equal(result$effect_status, "calculated")
+  expect_equal(result$effect_type, "zero_order")
+  expect_true(any(grepl("recovered from p-value", result$effect_warnings)))
+})
+
+# ============================================================
+# Test 5d — Regression: t + df (multiple) → partial r
+# t=2.5, df=27, n=31, k=3  →  partial r
+# ============================================================
+test_that("Multiple regression: t + df -> partial r", {
+  result <- compute_effect_size(list(
+    study_design        = "regression",
+    t_stat              = 2.5,
+    df                  = 27,
+    n                   = 31,
+    n_predictors        = 3,
+    multiple_predictors = TRUE
+  ))
+  expected_r <- 2.5 / sqrt(2.5^2 + 27)
+  expect_equal(round(result$r, 4), round(expected_r, 4))
+  expect_equal(result$effect_type, "partial")
+  expect_true(any(grepl("Partial r", result$effect_warnings)))
+})
+
+# ============================================================
+# Test 5e — Regression: standardised β (multiple, no t)
+# Cannot convert → insufficient_data
+# ============================================================
+test_that("Std beta multiple regression: insufficient_data", {
+  result <- compute_effect_size(list(
+    study_design        = "regression",
+    beta                = 0.35,
+    beta_type           = "standardized",
+    multiple_predictors = TRUE
+  ))
+  expect_equal(result$effect_status, "insufficient_data")
+  expect_null(result$r)
+  expect_equal(result$effect_type, "partial")
+  expect_true(any(grepl("cannot be directly converted", result$effect_warnings)))
 })
 
 # ============================================================

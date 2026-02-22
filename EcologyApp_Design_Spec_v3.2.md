@@ -669,30 +669,97 @@ If enabled: `SD = 0.01 × mean`; set `effect_status = small_sd_used`; add warnin
 
 | Field | Type | Tooltip |
 |-------|------|---------|
-| `beta` | Numeric | Regression coefficient (standardised or unstandardised) |
+| `beta` | Numeric | Regression coefficient |
+| `beta_type` | Select one | `standardized` or `unstandardized` — whether the reported β is a standardised (unit-free) or unstandardised (raw-scale) coefficient. Tooltip: *"Standardised β is unitless and typically reported with 'standardised' in the table header or methods. Unstandardised β has the same units as the response variable."* |
 | `se_beta` | Numeric | Standard error of the regression coefficient |
 | `n` | Integer | Total sample size |
 | `t_stat` | Numeric | t-statistic for the coefficient |
 | `p_value` | Numeric | p-value for the coefficient |
-| `df` | Numeric | Residual degrees of freedom. Tooltip: *"Look for df in regression output. For F(1, 45), use 45 (the second number)."* |
+| `df` | Numeric | Residual degrees of freedom. Tooltip: *"Look for df in regression output. For F(1, 45), use 45 (the second number). For simple regression df = N − 2; for multiple regression df = N − k − 1 where k = number of predictors."* |
 | `sd_X` | Numeric | Standard deviation of the predictor variable |
 | `sd_Y` | Numeric | Standard deviation of the response variable |
 | `multiple_predictors` | Boolean | Check if the model contains more than one predictor |
+| `n_predictors` | Integer | Number of predictors in the model (visible only when `multiple_predictors = true`). Used to compute df = N − k − 1 when df is not reported directly. |
 
-#### Conversion Pipeline
+#### Conversion Pipeline — Simple Linear Regression (`multiple_predictors = false`)
 
-**If `multiple_predictors = false` (single predictor):**
+All pathways for simple regression produce a **zero-order** correlation. The result field `effect_type = "zero_order"` is set.
 
-1. If `t_stat` and `df` present: `r = t / sqrt(t² + df)`
-2. Else if `beta`, `sd_X`, `sd_Y` present: `r = beta × (sd_X / sd_Y)`
-3. Else: `effect_status = insufficient_data`
+**Pathway 1 — Standardised β (direct):**
+If `beta_type = standardized` and `beta` is present:
+`r = β`
+No further conversion needed.
 
-**If `multiple_predictors = true`:**
+**Pathway 2 — Unstandardised β + SDs:**
+If `beta_type = unstandardized` (or unset) and `beta`, `sd_X`, `sd_Y` are present:
+`r = β × (SD_X / SD_Y)`
 
-1. Treat as partial *r*
-2. If `t_stat` and `df` present: `r = t / sqrt(t² + df)` (partial r via t)
-3. Else if `beta`, `sd_X`, `sd_Y` present: `r = beta × (sd_X / sd_Y)` (partial r approximation; add warning)
-4. Else: `effect_status = insufficient_data`
+**Pathway 3 — β + SE (derive t):**
+If `beta` and `se_beta` are present (and `n` or `df` available):
+1. `t = β / SE_β`
+2. `df = N − 2` (if df not reported directly)
+3. `r = t / sqrt(t² + df)`
+
+**Pathway 4 — β + p-value + N:**
+If `beta`, `p_value`, and `n` are present:
+1. `df = N − 2`
+2. Recover t from p-value: `t = qt(1 − p/2, df)` (two-tailed)
+3. Apply sign of β: `t = sign(β) × |t|`
+4. `r = t / sqrt(t² + df)`
+
+**Pathway 5 — t-stat + df (direct):**
+If `t_stat` and `df` present:
+`r = t / sqrt(t² + df)`
+
+**Fallback:** `effect_status = insufficient_data`
+
+**Priority order:** Pathway 1 > Pathway 2 > Pathway 5 > Pathway 3 > Pathway 4
+
+---
+
+#### Conversion Pipeline — Multiple Regression (`multiple_predictors = true`)
+
+All pathways for multiple regression produce a **partial** correlation. The result field `effect_type = "partial"` is set. A warning is always added: `"Partial r from multiple predictor model"`.
+
+> **Important:** For multiple regression, standardised β ≠ r. A standardised β in a multiple regression represents a partial effect, not a zero-order correlation. It cannot be directly converted to r.
+
+**Pathway 1 — t-stat + df (partial r):**
+If `t_stat` and `df` present:
+`r_partial = t / sqrt(t² + df)`
+Where df should be N − k − 1 (residual df from the regression output).
+
+**Pathway 2 — β + SE (derive t, partial r):**
+If `beta` and `se_beta` are present (and `df` or `n` + `n_predictors` available):
+1. `t = β / SE_β`
+2. If df not reported: `df = N − k − 1`
+3. `r_partial = t / sqrt(t² + df)`
+
+**Pathway 3 — β + p-value + N + k:**
+If `beta`, `p_value`, `n`, and `n_predictors` are present:
+1. `df = N − k − 1`
+2. Recover t from p-value: `t = qt(1 − p/2, df)`, apply sign of β
+3. `r_partial = t / sqrt(t² + df)`
+
+**Pathway 4 — Unstandardised β + SDs (approximation):**
+If `beta_type = unstandardized` and `beta`, `sd_X`, `sd_Y` present:
+`r ≈ β × (SD_X / SD_Y)`
+Add warning: `"Partial r approximated from β × (SD_X / SD_Y) in multiple regression; interpret with caution"`
+
+> **Note:** Standardised β from multiple regression (`beta_type = standardized`) can NOT be converted to r. If the reviewer enters a standardised β with `multiple_predictors = true` and no t-stat, SE, or p-value is available, set `effect_status = insufficient_data` and add warning: `"Standardised β from multiple regression cannot be directly converted to r; provide t-stat, SE, or p-value instead"`.
+
+**Fallback:** `effect_status = insufficient_data`
+
+---
+
+#### Quick Reference: Regression Pathways
+
+| Reported Statistics | Simple Regression | Multiple Regression |
+|--------------------|-------------------|---------------------|
+| Standardised β | r = β (zero-order) | ✗ Cannot convert directly |
+| Unstandardised β + SD_X + SD_Y | r = β × (SD_X / SD_Y) (zero-order) | r ≈ β × (SD_X / SD_Y) (partial, with warning) |
+| β + SE + N | t = β/SE; r via t (zero-order) | t = β/SE; r_partial via t |
+| β + p + N | Recover t from p; r via t (zero-order) | Recover t from p; r_partial via t (needs k) |
+| t-stat + df | r = t/√(t²+df) (zero-order) | r_partial = t/√(t²+df) (partial) |
 
 ---
 
@@ -797,7 +864,8 @@ A **pathway legend** is displayed at the top of each study design's field set, e
 |-------------|-----------------|--------------------|--------------------|  
 | Control / Treatment | means + variability + n → Hedges g → r | t-stat + df → r | F-stat + df → t → r |
 | Correlation | r (reported) | covariance / (SD_X × SD_Y) | t-stat + df → r |
-| Regression | t-stat + df → r | β × (SD_X / SD_Y) → r | — |
+| Regression (simple) | standardised β → r; or unstd β × (SD_X / SD_Y) | t-stat + df → r; or β/SE → t → r | β + p + N → t → r |
+| Regression (multiple) | t-stat + df → r_partial; or β/SE → t → r_partial | unstd β × (SD_X / SD_Y) ≈ r_partial | β + p + N + k → t → r_partial |
 | Interaction (Pathway A) | t-stat + df → r | — | — |
 
 Fields that are not pathway-specific (e.g. `control_description`, `treatment_description`, `multiple_predictors`, `se_beta`, `p_value`) appear outside any colour-coded panel.
@@ -816,7 +884,12 @@ All tests use `testthat`. Tolerance: 4 decimal places.
 | Means + SD path (Hedges g) | `m1=5, m2=3, sd1=2, sd2=2, n1=20, n2=20` | `≈ 0.4472` |
 | Correlation direct | `r=0.35, n=50` | `r=0.3500; var_z=0.0213` |
 | Covariance path | `cov=0.6, sd_X=1.2, sd_Y=2.0` | `0.2500` |
-| Regression + SDs | `beta=0.4, sd_X=1.5, sd_Y=2.0` | `0.3000` |
+| Regression: standardised β (simple) | `beta=0.35, beta_type=standardized, multiple_predictors=false` | `0.3500` (zero-order) |
+| Regression: unstd β + SDs (simple) | `beta=0.4, beta_type=unstandardized, sd_X=1.5, sd_Y=2.0, multiple_predictors=false` | `0.3000` (zero-order) |
+| Regression: β + SE (simple) | `beta=1.5, se_beta=0.6, n=32, multiple_predictors=false` | t=2.5, df=30 → `0.4152` (zero-order) |
+| Regression: β + p + N (simple) | `beta=1.5, p_value=0.019, n=32, multiple_predictors=false` | recover t from p, df=30 → r (zero-order) |
+| Regression: t + df (multiple) | `t=2.5, df=27, multiple_predictors=true, n_predictors=3` | `0.4336` (partial, flagged) |
+| Regression: std β (multiple, no t) | `beta=0.35, beta_type=standardized, multiple_predictors=true` | `insufficient_data` (cannot convert) |
 | Interaction Pathway B | `r_A=0.5, r_B=0.2, n_A=30, n_B=30` | `z_diff = atanh(0.5) − atanh(0.2); var_z_diff = 1/27 + 1/27` |
 | SE to SD conversion | `se=0.5, n=25` | `SD = 2.5` |
 | 95% CI to SD | `ci_half_width=1.96, n=30` | `SD = 1.0` |
