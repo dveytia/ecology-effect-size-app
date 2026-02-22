@@ -152,7 +152,7 @@ Create 3 single labels (text, select one, boolean), 1 group with 2 children, 1 e
 - Machine name auto-derived from display name (JS inline: lowercase + underscores). User can override; override is locked once they manually edit the field.
 - `mod_label_builder_server` is called inside `mod_project_home_server`; the labels tab `renderUI` renders `mod_label_builder_ui(ns("label_builder"))`.
 
-**Status:** [ ] Not started  [x] In progress  [ ] Gate passed
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
 
