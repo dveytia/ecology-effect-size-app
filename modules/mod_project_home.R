@@ -168,8 +168,12 @@ mod_project_home_server <- function(id, project_id, session_rv, app_state) {
 
     output$export_tab <- renderUI({
       req(project_id())
-      .stub_tab(10, "Export", "file-export")
+      mod_export_ui(ns("export"))
     })
+
+    mod_export_server("export",
+                      project_id = project_id,
+                      session_rv = session_rv)
 
     output$auditlog_tab <- renderUI({
       req(project_id())
