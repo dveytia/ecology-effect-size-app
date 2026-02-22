@@ -35,5 +35,10 @@ source("modules/mod_effect_size_ui.R")
 source("modules/mod_export.R")
 source("modules/mod_audit_log.R")
 
+# ---- Google Drive auth (loads cached OAuth token) -----------
+# Token is cached in .httr-oauth after running gdrive_init_oauth() once.
+# If no token is available, Drive features are silently disabled.
+gdrive_init()
+
 # ---- Global options -----------------------------------------
 options(shiny.maxRequestSize = 50 * 1024^2)   # 50 MB upload limit
