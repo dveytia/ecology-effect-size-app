@@ -42,3 +42,21 @@ str_trunc <- function(x, n = 80) {
 unix_to_posixct <- function(ts) {
   as.POSIXct(as.numeric(ts), origin = "1970-01-01", tz = "UTC")
 }
+
+#' Render a clickable question-mark icon that shows a Bootstrap tooltip
+#'
+#' Place next to a field label so users can click the icon for guidance.
+#' Tooltips are initialised by www/tooltips.js and triggered on click.
+#'
+#' @param text  Tooltip text to display when the icon is clicked
+#' @return      An inline HTML span tag
+tooltip_icon <- function(text) {
+  tags$span(
+    class               = "tooltip-icon ms-1",
+    `data-bs-toggle`    = "tooltip",
+    `data-bs-title`     = text,
+    `data-bs-trigger`   = "click",
+    `data-bs-placement` = "top",
+    icon("circle-question")
+  )
+}

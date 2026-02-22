@@ -206,8 +206,8 @@ mod_effect_size_ui_ui <- function(id) {
       div(class = "row g-2",
         div(class = "col-md-4",
           selectInput(p("var_statistic_type"),
-                      tags$span("Variability type",
-                        title = "What type of variability is reported?"),
+                      tagList("Variability type",
+                        tooltip_icon("What type of variability is reported?")),
                       choices = .var_stat_type_choices)
         ),
         div(class = "col-md-4",
@@ -235,14 +235,14 @@ mod_effect_size_ui_ui <- function(id) {
       div(class = "row g-2",
         div(class = "col-md-6",
           numericInput(p("t_stat"),
-                       tags$span("t-statistic",
-                         title = 'Look for t = or a value in parentheses, e.g. t(24) = 2.3'),
+                       tagList("t-statistic",
+                         tooltip_icon('Look for t = or a value in parentheses, e.g. t(24) = 2.3')),
                        value = NA_real_)
         ),
         div(class = "col-md-6",
           numericInput(p("df"),
-                       tags$span("Degrees of freedom (df)",
-                         title = 'Look for \"df =\", or the number in parentheses after t, e.g. t(24): df = 24. For F(1, 45): df = 45 (use the second number).'),
+                       tagList("Degrees of freedom (df)",
+                         tooltip_icon('Look for "df =", or the number in parentheses after t, e.g. t(24): df = 24. For F(1, 45): df = 45 (use the second number).')),
                        value = NA_real_)
         )
       )
@@ -252,8 +252,8 @@ mod_effect_size_ui_ui <- function(id) {
       div(class = "row g-2",
         div(class = "col-md-4",
           numericInput(p("F_stat"),
-                       tags$span("F-statistic",
-                         title = "Look for F = in ANOVA tables"),
+                       tagList("F-statistic",
+                         tooltip_icon("Look for F = in ANOVA tables")),
                        value = NA_real_)
         ),
         div(class = "col-md-4",
@@ -283,8 +283,8 @@ mod_effect_size_ui_ui <- function(id) {
       div(class = "row g-2",
         div(class = "col-md-4",
           numericInput(p("r_reported"),
-                       tags$span("r (reported)",
-                         title = "Pearson r or Spearman rho as reported. Range: -1 to 1"),
+                       tagList("r (reported)",
+                         tooltip_icon("Pearson r or Spearman rho as reported. Range: -1 to 1")),
                        value = NA_real_, min = -1, max = 1, step = 0.01)
         ),
         div(class = "col-md-4",
@@ -315,14 +315,14 @@ mod_effect_size_ui_ui <- function(id) {
       div(class = "row g-2",
         div(class = "col-md-6",
           numericInput(p("t_stat"),
-                       tags$span("t-statistic",
-                         title = 'Look for t = or a value in parentheses'),
+                       tagList("t-statistic",
+                         tooltip_icon('Look for t = or a value in parentheses')),
                        value = NA_real_)
         ),
         div(class = "col-md-6",
           numericInput(p("df"),
-                       tags$span("Degrees of freedom",
-                         title = "For correlation tests, df is usually n \u2212 2."),
+                       tagList("Degrees of freedom",
+                         tooltip_icon("For correlation tests, df is usually n \u2212 2.")),
                        value = NA_real_)
         )
       )
@@ -341,8 +341,8 @@ mod_effect_size_ui_ui <- function(id) {
     # Beta type selector + beta value
     div(class = "row g-2",
       div(class = "col-md-4",
-        selectInput(p("beta_type"), tags$span("\u03b2 type",
-          title = "Standardised \u03b2 is unitless (reported as 'standardised' in the paper). Unstandardised \u03b2 has the same units as the response variable."),
+        selectInput(p("beta_type"), tagList("\u03b2 type",
+          tooltip_icon("Standardised \u03b2 is unitless (reported as 'standardised' in the paper). Unstandardised \u03b2 has the same units as the response variable.")),
           choices = c(
             "-- select --"     = "",
             "Standardised"     = "standardized",
@@ -373,20 +373,20 @@ mod_effect_size_ui_ui <- function(id) {
       div(class = "row g-2",
         div(class = "col-md-4",
           numericInput(p("t_stat"),
-                       tags$span("t-statistic",
-                         title = "t-statistic for the coefficient"),
+                       tagList("t-statistic",
+                         tooltip_icon("t-statistic for the coefficient")),
                        value = NA_real_)
         ),
         div(class = "col-md-4",
           numericInput(p("df"),
-                       tags$span("Residual df",
-                         title = 'Look for df in regression output. For F(1, 45), use 45 (the second number). Simple regression: df = N \u2212 2. Multiple regression: df = N \u2212 k \u2212 1.'),
+                       tagList("Residual df",
+                         tooltip_icon('Look for df in regression output. For F(1, 45), use 45 (the second number). Simple regression: df = N \u2212 2. Multiple regression: df = N \u2212 k \u2212 1.')),
                        value = NA_real_)
         ),
         div(class = "col-md-4",
           numericInput(p("se_beta"),
-                       tags$span("SE of \u03b2",
-                         title = "Standard error of the coefficient. Used to derive t = \u03b2 / SE when t is not reported."),
+                       tagList("SE of \u03b2",
+                         tooltip_icon("Standard error of the coefficient. Used to derive t = \u03b2 / SE when t is not reported.")),
                        value = NA_real_)
         )
       )
@@ -396,24 +396,24 @@ mod_effect_size_ui_ui <- function(id) {
       div(class = "row g-2",
         div(class = "col-md-6",
           numericInput(p("p_value"),
-                       tags$span("p-value",
-                         title = "p-value for the coefficient. Used to recover t when t and SE are not available."),
+                       tagList("p-value",
+                         tooltip_icon("p-value for the coefficient. Used to recover t when t and SE are not available.")),
                        value = NA_real_)
         )
       )
     ),
     # Multiple predictors toggle + number of predictors
     checkboxInput(p("multiple_predictors"),
-                  tags$span("Multiple predictors",
-                    title = "Check if the model contains more than one predictor. Effect will be flagged as partial correlation."),
+                  tagList("Multiple predictors",
+                    tooltip_icon("Check if the model contains more than one predictor. Effect will be flagged as partial correlation.")),
                   value = FALSE),
     conditionalPanel(
       condition = paste0("input['", p("multiple_predictors"), "'] == true"),
       div(class = "row g-2 mb-2",
         div(class = "col-md-4",
           numericInput(p("n_predictors"),
-                       tags$span("Number of predictors (k)",
-                         title = "Number of predictors in the model. Used to compute df = N \u2212 k \u2212 1 when df is not reported directly."),
+                       tagList("Number of predictors (k)",
+                         tooltip_icon("Number of predictors in the model. Used to compute df = N \u2212 k \u2212 1 when df is not reported directly.")),
                        value = NA_integer_, min = 2, step = 1)
         ),
         div(class = "col-md-8",
@@ -449,8 +449,8 @@ mod_effect_size_ui_ui <- function(id) {
       div(class = "row g-2",
         div(class = "col-md-6",
           numericInput(p("t_stat"),
-                       tags$span("t-statistic",
-                         title = "t-statistic for the interaction term"),
+                       tagList("t-statistic",
+                         tooltip_icon("t-statistic for the interaction term")),
                        value = NA_real_)
         ),
         div(class = "col-md-6",
