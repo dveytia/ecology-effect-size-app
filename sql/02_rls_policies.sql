@@ -225,6 +225,14 @@ CREATE POLICY uploads_insert ON public.uploads
   FOR INSERT TO authenticated
   WITH CHECK (public.user_can_access_project(project_id));
 
+CREATE POLICY uploads_update ON public.uploads
+  FOR UPDATE TO authenticated
+  USING (public.user_can_access_project(project_id));
+
+CREATE POLICY uploads_delete ON public.uploads
+  FOR DELETE TO authenticated
+  USING (public.user_can_access_project(project_id));
+
 -- ============================================================
 -- 10. articles — TO authenticated
 -- ============================================================
@@ -244,7 +252,7 @@ CREATE POLICY articles_delete ON public.articles
   FOR DELETE TO authenticated
   USING (
     public.user_can_access_project(project_id)
-    AND review_status = 'unreviewed'
+    AND review_status IN ('unreviewed', 'skipped')
   );
 
 -- ============================================================

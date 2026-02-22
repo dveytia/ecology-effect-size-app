@@ -228,10 +228,16 @@ mod_upload_management_server <- function(id, project_id, session_rv,
       req(pid, token)
 
       tryCatch({
-        # 1. Delete unreviewed AND skipped articles in this batch
+        # 1. Delete unreviewed AND skipped articles in this batch.
+        #    Two separate calls avoid httr2 URL-encoding the in.() syntax
+        #    in a way that some PostgREST versions misparse.
         sb_delete_where("articles",
                         filters = list(upload_batch_id = bid,
-                                       review_status   = "in.(unreviewed,skipped)"),
+                                       review_status   = "eq.unreviewed"),
+                        token   = token)
+        sb_delete_where("articles",
+                        filters = list(upload_batch_id = bid,
+                                       review_status   = "eq.skipped"),
                         token   = token)
 
         # 2. Delete pending duplicate flags for this batch
