@@ -70,6 +70,8 @@ mod_review_server <- function(id, project_id, session_rv) {
     loaded_at          <- reactiveVal(NULL)   # POSIXct: when article was opened
     # group_instances: named list  group_name -> list of instance keys (strings)
     group_instances    <- reactiveVal(list())
+    # Effect size save trigger (incremented on Save to signal the ES module)
+    es_save_trigger    <- reactiveVal(0)
 
     # ---- Simple unique key generator -----------------------
     .new_key <- function() paste0(sample(c(letters[1:6], 0:9), 8, replace = TRUE),
@@ -185,6 +187,15 @@ mod_review_server <- function(id, project_id, session_rv) {
       group_instances(insts)
     }
 
+    # ---- Effect size module server call ----
+    es_module <- mod_effect_size_ui_server(
+      "effect_size_form",
+      session_rv         = session_rv,
+      article_id_reactive = current_article_id,
+      project_id_reactive = project_id,
+      on_save_trigger    = es_save_trigger
+    )
+
     # Reset when project changes
     observeEvent(project_id(), {
       current_article_id(NULL)
@@ -285,6 +296,23 @@ mod_review_server <- function(id, project_id, session_rv) {
     })
 
     # --------------------------------------------------------
+    # Current article row — cached snapshot so review_panel
+    # does NOT depend on all_articles() and won't re-render
+    # when articles_refresh() fires after Save.
+    # --------------------------------------------------------
+    current_article_row <- reactiveVal(NULL)
+
+    observeEvent(current_article_id(), {
+      aid <- current_article_id()
+      if (is.null(aid)) { current_article_row(NULL); return() }
+      df <- all_articles()
+      if (!is.data.frame(df) || nrow(df) == 0) { current_article_row(NULL); return() }
+      row <- df[df$article_id == aid, , drop = FALSE]
+      if (nrow(row) == 0) { current_article_row(NULL); return() }
+      current_article_row(row)
+    }, ignoreNULL = FALSE)
+
+    # --------------------------------------------------------
     # Review panel (right column)
     # --------------------------------------------------------
     output$review_panel <- renderUI({
@@ -296,10 +324,8 @@ mod_review_server <- function(id, project_id, session_rv) {
         ))
       }
 
-      df <- all_articles()
-      if (!is.data.frame(df) || nrow(df) == 0) return(NULL)
-      row <- df[df$article_id == aid, , drop = FALSE]
-      if (nrow(row) == 0) return(NULL)
+      row <- current_article_row()
+      if (is.null(row) || nrow(row) == 0) return(NULL)
 
       # PDF button
       pdf_link <- row$pdf_drive_link[1]
@@ -437,12 +463,7 @@ mod_review_server <- function(id, project_id, session_rv) {
             insts[[gn]] <- lapply(seq_len(n_exist), function(.) .new_key())
             changed <- TRUE
           } else if (length(gn_insts) == 0) {
-            existing <- meta[[gn]]
-            n_exist  <- if (is.list(existing)) {
-                          if (length(existing) > 0) length(existing) else 1L
-                        } else 1L
-            insts[[gn]] <- lapply(seq_len(n_exist), function(.) .new_key())
-            changed <- TRUE
+            # Allow zero instances — user explicitly removed all
           }
         }
       }
@@ -654,9 +675,8 @@ mod_review_server <- function(id, project_id, session_rv) {
         },
 
         "effect_size" = {
-          # Phase 9 will replace this stub with mod_effect_size_ui
-          div(class = "alert alert-info py-2 small",
-            icon("info-circle"), " Effect size entry will be available in Phase 9.")
+          # Render the full effect size sub-form inline at this label's position
+          mod_effect_size_ui_ui(ns("effect_size_form"))
         },
 
         # Fallback
@@ -936,6 +956,9 @@ mod_review_server <- function(id, project_id, session_rv) {
           showNotification(paste("Status update failed:", e$message),
                             type = "warning")
       )
+
+      # Trigger effect size computation and save
+      es_save_trigger(es_save_trigger() + 1L)
 
       # Audit log
       .write_audit(aid, "save", old_json = old_meta, new_json = vals)
