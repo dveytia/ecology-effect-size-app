@@ -314,10 +314,18 @@ Review one article for each of 5 study designs. Test Pathway A and B for interac
 - Wired into `mod_review.R`:
   - `es_save_trigger` reactiveVal added to State section
   - `mod_effect_size_ui_server()` called once in server, before project change observer
-  - `"effect_size"` variable_type in `.render_field()` now renders `mod_effect_size_ui_ui(ns("effect_size_form"))` instead of the Phase 7 stub
+  - Effect size form rendered as its own card in `review_panel`, separate from `label_form` (so label-group changes don't destroy ES inputs)
+  - `"effect_size"` variable_type in `.render_field()` shows an info note pointing to the ES card below
   - `.do_save()` increments `es_save_trigger` after metadata upsert, before audit log write
 - Pathway B sub-forms use `"grpA_"` and `"grpB_"` prefixes for all field IDs to avoid namespace collisions
 - No new SQL required (effect_sizes table created in Phase 1)
+- **Pathway colour coding:** Each study design's fields are wrapped in colour-coded `div`s indicating which conversion pathway they belong to:
+  - **Green** (`es-pathway-a`) — Primary pathway (e.g. means + variability → Hedges g → r)
+  - **Blue** (`es-pathway-b`) — Fallback 1 (e.g. t-stat + df → r)
+  - **Amber** (`es-pathway-c`) — Fallback 2 (e.g. F-stat + df → t → r)
+  - A colour legend is shown at the top of each design's field set via `.pathway_legend()`
+  - CSS classes defined in `www/custom.css` (border-left + tinted background)
+- **"Calculate effect size" button:** `actionButton(ns("btn_calculate"))` at the bottom of the form runs `compute_effect_size()` and updates the result display without saving to the database, allowing users to preview results without scrolling to Save
 
 **Status:** [ ] Not started  [x] In progress  [ ] Gate passed
 

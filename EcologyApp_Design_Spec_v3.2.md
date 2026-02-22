@@ -760,7 +760,7 @@ var_z <- NULL                          # if neither n nor se_r available
 
 ### 8.10 Effect Size Result Display
 
-After Save, show below the form:
+After Save **or** clicking the **"Calculate effect size"** button, show below the form:
 
 ```
 Computed effect size:
@@ -771,13 +771,42 @@ Computed effect size:
   Warnings: [list if any]
 ```
 
+The **"Calculate effect size"** button runs `compute_effect_size()` and displays the result immediately **without** writing to the database, allowing reviewers to preview results without scrolling to Save. Save still computes + persists as before.
+
 If `effect_status = insufficient_data`, show:
 
 > *"Effect size could not be computed. Missing: [list of missing fields]. Raw data has been saved."*
 
 ---
 
-### 8.11 Unit Tests (`tests/test_effectsize.R`)
+### 8.11 Pathway Colour Coding
+
+To help reviewers identify which fields belong to which conversion pathway, the UI wraps groups of fields in colour-coded panels:
+
+| Colour | CSS Class | Meaning | Visual |
+|--------|-----------|---------|--------|
+| **Green** | `es-pathway-a` | Primary conversion pathway | Green left border + light green tint |
+| **Blue** | `es-pathway-b` | Fallback / alternative pathway 1 | Blue left border + light blue tint |
+| **Amber** | `es-pathway-c` | Fallback / alternative pathway 2 | Amber left border + light amber tint |
+
+A **pathway legend** is displayed at the top of each study design's field set, explaining which colour maps to which conversion route.
+
+#### Pathway mapping per study design
+
+| Study Design | Green (Primary) | Blue (Fallback 1) | Amber (Fallback 2) |
+|-------------|-----------------|--------------------|--------------------|  
+| Control / Treatment | means + variability + n → Hedges g → r | t-stat + df → r | F-stat + df → t → r |
+| Correlation | r (reported) | covariance / (SD_X × SD_Y) | t-stat + df → r |
+| Regression | t-stat + df → r | β × (SD_X / SD_Y) → r | — |
+| Interaction (Pathway A) | t-stat + df → r | — | — |
+
+Fields that are not pathway-specific (e.g. `control_description`, `treatment_description`, `multiple_predictors`, `se_beta`, `p_value`) appear outside any colour-coded panel.
+
+CSS classes are defined in `www/custom.css`. The colour coding is purely visual; it does not affect computation logic.
+
+---
+
+### 8.12 Unit Tests (`tests/test_effectsize.R`)
 
 All tests use `testthat`. Tolerance: 4 decimal places.
 
