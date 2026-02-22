@@ -1,18 +1,1006 @@
 # ============================================================
 # modules/mod_review.R — Main review interface
 # ============================================================
-# Implemented in Phase 7. Stub only.
+# Phase 7: Full implementation.
+# - Article list sidebar with search and status badges
+# - Article header: title, author, year, DOI, abstract, PDF button
+# - Dynamic label form rendered from project label schema
+# - Label groups with add/remove instance support
+# - Save, Next, Skip action buttons
+# - Concurrency conflict detection via audit_log
+# - Upserts to article_metadata_json; updates articles.review_status
+# - Audit log writes for every save and skip action
+# ============================================================
 
+# ---- UI -------------------------------------------------------
 mod_review_ui <- function(id) {
   ns <- NS(id)
-  div(
-    h4("Review Interface"),
-    p(class = "text-muted", "Phase 7: Code articles with dynamic labels, effect sizes, and PDF viewer.")
+  div(class = "container-fluid py-3",
+
+    # ---- Top bar: search + progress -------------------------
+    div(class = "row mb-3 align-items-center g-2",
+      div(class = "col-md-6",
+        div(class = "input-group",
+          tags$span(class = "input-group-text", icon("search")),
+          textInput(ns("search"), label = NULL,
+                    placeholder = "Search by ID, title or author…")
+        )
+      ),
+      div(class = "col-md-6 text-md-end",
+        uiOutput(ns("progress_badge"))
+      )
+    ),
+
+    # ---- Main layout: article list + review panel -----------
+    div(class = "row g-3",
+
+      # ---- Left: scrollable article list -------------------
+      div(class = "col-lg-3",
+        div(class = "card h-100",
+          div(class = "card-header py-2 d-flex align-items-center",
+            strong(icon("list"), " Articles"),
+            uiOutput(ns("list_count_badge"), inline = TRUE)
+          ),
+          div(class = "card-body p-0",
+            style = "max-height: 75vh; overflow-y: auto;",
+            uiOutput(ns("article_list_ui"))
+          )
+        )
+      ),
+
+      # ---- Right: review panel -----------------------------
+      div(class = "col-lg-9",
+        uiOutput(ns("review_panel"))
+      )
+    )
   )
 }
 
+# ---- Server ---------------------------------------------------
 mod_review_server <- function(id, project_id, session_rv) {
   moduleServer(id, function(input, output, session) {
-    # STUB — Phase 7 implementation
+    ns <- session$ns
+
+    # --------------------------------------------------------
+    # State
+    # --------------------------------------------------------
+    articles_refresh   <- reactiveVal(0)
+    labels_refresh     <- reactiveVal(0)
+    current_article_id <- reactiveVal(NULL)
+    loaded_at          <- reactiveVal(NULL)   # POSIXct: when article was opened
+    # group_instances: named list  group_name -> list of instance keys (strings)
+    group_instances    <- reactiveVal(list())
+
+    # ---- Simple unique key generator -----------------------
+    .new_key <- function() paste0(sample(c(letters[1:6], 0:9), 8, replace = TRUE),
+                                   collapse = "")
+
+    # --------------------------------------------------------
+    # Data loading
+    # --------------------------------------------------------
+
+    # All articles for this project
+    all_articles <- reactive({
+      articles_refresh()
+      pid <- project_id()
+      req(pid, session_rv$token)
+      tryCatch({
+        rows <- sb_get("articles",
+          filters = list(project_id = pid),
+          select  = paste("article_id,title,author,year,doi_clean,",
+                          "abstract,review_status,pdf_drive_link,article_num"),
+          token   = session_rv$token)
+        if (!is.data.frame(rows) || nrow(rows) == 0) return(data.frame())
+        # Ensure review_status has no NAs for downstream comparisons
+        rows$review_status[is.na(rows$review_status)] <- "unreviewed"
+        rows
+      }, error = function(e) {
+        showNotification(paste("Could not load articles:", e$message), type = "error")
+        data.frame()
+      })
+    })
+
+    # Filtered by search text
+    filtered_articles <- reactive({
+      df <- all_articles()
+      if (!is.data.frame(df) || nrow(df) == 0) return(df)
+      q  <- trimws(tolower(input$search %||% ""))
+      if (nchar(q) == 0) return(df)
+      # Use ifelse for vectorised NA-safe coercion (not %||% which is scalar-only)
+      t_col  <- tolower(ifelse(is.na(df$title),      "", as.character(df$title)))
+      a_col  <- tolower(ifelse(is.na(df$author),     "", as.character(df$author)))
+      id_col <- tolower(ifelse(is.na(df$article_num), "", as.character(df$article_num)))
+      mask   <- grepl(q, t_col, fixed = TRUE) |
+                grepl(q, a_col, fixed = TRUE) |
+                grepl(q, id_col, fixed = TRUE)
+      df[mask, , drop = FALSE]
+    })
+
+    # Label schema for this project (re-fetches on labels_refresh)
+    project_labels <- reactive({
+      labels_refresh()   # dependency so labels re-fetch when triggered
+      pid <- project_id()
+      req(pid, session_rv$token)
+      tryCatch({
+        rows <- sb_get("labels",
+          filters = list(project_id = pid),
+          select  = "label_id,label_type,parent_label_id,category,name,display_name,instructions,variable_type,allowed_values,mandatory,order_index",
+          token   = session_rv$token)
+        if (!is.data.frame(rows) || nrow(rows) == 0) return(data.frame())
+        ord <- ifelse(is.na(rows$order_index), 0L, as.integer(rows$order_index))
+        rows[order(ord), , drop = FALSE]
+      }, error = function(e) { message("[project_labels] ", e$message); data.frame() })
+    })
+
+    # Load existing metadata JSON for an article
+    .load_meta <- function(article_id) {
+      tryCatch({
+        rows <- sb_get("article_metadata_json",
+          filters = list(article_id = article_id),
+          select  = "json_data",
+          token   = session_rv$token)
+        if (is.data.frame(rows)) {
+         if (nrow(rows) > 0) {
+          jd <- rows$json_data[1]
+          if (is.character(jd)) {
+           if (nchar(jd) > 0) jsonlite::fromJSON(jd, simplifyVector = FALSE)
+           else list()
+          } else if (is.list(jd)) jd
+          else list()
+         } else list()
+        } else list()
+      }, error = function(e) list())
+    }
+
+    # --------------------------------------------------------
+    # Article selection
+    # --------------------------------------------------------
+    .select_article <- function(aid) {
+      current_article_id(aid)
+      loaded_at(Sys.time())
+
+      # Re-fetch labels so newly added labels are visible
+      labels_refresh(labels_refresh() + 1L)
+
+      # Build group_instances from existing metadata
+      meta  <- .load_meta(aid)
+      lbls  <- project_labels()
+      insts <- list()
+
+      if (is.data.frame(lbls)) { if (nrow(lbls) > 0) {
+        pid_col  <- vapply(seq_len(nrow(lbls)), function(r)
+          as.character(lbls$parent_label_id[r] %||% "")[1], "")
+        pid_col[is.na(pid_col)] <- ""
+        grp_rows <- lbls[lbls$label_type == "group" & pid_col == "", ,
+                         drop = FALSE]
+        for (i in seq_len(nrow(grp_rows))) {
+          gname    <- grp_rows$name[i]
+          existing <- meta[[gname]]
+          n_exist  <- if (is.list(existing)) {
+            if (length(existing) > 0) length(existing) else 1L
+          } else 1L
+          insts[[gname]] <- lapply(seq_len(n_exist), function(.) .new_key())
+        }
+      }}
+      group_instances(insts)
+    }
+
+    # Reset when project changes
+    observeEvent(project_id(), {
+      current_article_id(NULL)
+      group_instances(list())
+    }, ignoreNULL = TRUE)
+
+    # Auto-select first unreviewed article when articles first load
+    observeEvent(all_articles(), {
+      if (!is.null(current_article_id())) return()
+      df <- all_articles()
+      if (!is.data.frame(df) || nrow(df) == 0) return()
+      unrev <- df[df$review_status == "unreviewed", , drop = FALSE]
+      first <- if (nrow(unrev) > 0) unrev$article_id[1] else df$article_id[1]
+      .select_article(first)
+    }, ignoreNULL = FALSE)
+
+    # Click handler from list sidebar
+    observeEvent(input$select_article, {
+      req(input$select_article)
+      .select_article(input$select_article)
+    })
+
+    # Refresh button — also refreshes labels so newly added labels appear
+    observeEvent(input$btn_refresh, {
+      articles_refresh(articles_refresh() + 1L)
+      labels_refresh(labels_refresh() + 1L)
+    })
+
+    # --------------------------------------------------------
+    # Progress badge
+    # --------------------------------------------------------
+    output$progress_badge <- renderUI({
+      df <- all_articles()
+      if (!is.data.frame(df) || nrow(df) == 0) return(NULL)
+      n_done  <- sum(df$review_status %in% c("reviewed", "skipped"), na.rm = TRUE)
+      n_total <- nrow(df)
+      span(class = "badge bg-secondary fs-6",
+           sprintf("Progress: %d / %d", n_done, n_total))
+    })
+
+    output$list_count_badge <- renderUI({
+      n <- if (is.data.frame(filtered_articles())) nrow(filtered_articles()) else 0L
+      span(class = "badge bg-light text-dark ms-2 small", n)
+    })
+
+    # --------------------------------------------------------
+    # Article list sidebar
+    # --------------------------------------------------------
+    output$article_list_ui <- renderUI({
+      df  <- filtered_articles()
+      cid <- current_article_id()
+
+      if (!is.data.frame(df) || nrow(df) == 0)
+        return(p(class = "text-muted fst-italic p-3", "No articles found."))
+
+      lapply(seq_len(nrow(df)), function(i) {
+        aid    <- df$article_id[i]
+        status <- df$review_status[i] %||% "unreviewed"
+        active <- if (!is.null(cid)) identical(cid, aid) else FALSE
+
+        status_icon <- switch(status,
+          "reviewed" = icon("check-circle", class = "text-success me-1"),
+          "skipped"  = icon("forward",      class = "text-warning me-1"),
+          icon("circle", class = "text-muted me-1")
+        )
+
+        num_lbl <- if (!is.na(df$article_num[i])) df$article_num[i] else i
+        ttl     <- if (!is.na(df$title[i])) {
+                     if (nchar(df$title[i]) > 0) df$title[i] else sprintf("Article %s", num_lbl)
+                   } else sprintf("Article %s", num_lbl)
+        short   <- if (nchar(ttl) > 52) paste0(substr(ttl, 1, 52), "…") else ttl
+        auth    <- if (!is.na(df$author[i])) {
+                     if (nchar(df$author[i]) > 0) df$author[i] else "Unknown author"
+                   } else "Unknown author"
+        yr      <- if (!is.na(df$year[i])) df$year[i] else ""
+        sub_txt <- paste0("ID: ", num_lbl, " · ", auth, " · ", yr)
+
+        div(
+          class   = paste("px-2 py-2 border-bottom review-list-item",
+                          if (active) "bg-primary text-white" else ""),
+          style   = "cursor: pointer;",
+          onclick = sprintf('Shiny.setInputValue("%s", "%s", {priority:"event"});',
+                            ns("select_article"), aid),
+          div(class = "d-flex align-items-start",
+            div(class = "mt-1 me-1 flex-shrink-0", status_icon),
+            div(
+              tags$div(class = paste("fw-semibold",
+                                      if (active) "" else ""),
+                       style = "font-size:0.85em; line-height:1.2;",
+                       short),
+              tags$div(class = paste("small",
+                                      if (active) "text-white-50" else "text-muted"),
+                       sub_txt)
+            )
+          )
+        )
+      })
+    })
+
+    # --------------------------------------------------------
+    # Review panel (right column)
+    # --------------------------------------------------------
+    output$review_panel <- renderUI({
+      aid <- current_article_id()
+      if (is.null(aid)) {
+        return(div(class = "card p-5 text-center text-muted",
+          icon("book-open", class = "fa-3x mb-3"),
+          h5("Select an article from the list to begin reviewing")
+        ))
+      }
+
+      df <- all_articles()
+      if (!is.data.frame(df) || nrow(df) == 0) return(NULL)
+      row <- df[df$article_id == aid, , drop = FALSE]
+      if (nrow(row) == 0) return(NULL)
+
+      # PDF button
+      pdf_link <- row$pdf_drive_link[1]
+      has_pdf <- !is.null(pdf_link)
+      if (has_pdf) has_pdf <- !is.na(pdf_link)
+      if (has_pdf) has_pdf <- nchar(pdf_link) > 0
+      pdf_btn <- if (has_pdf) {
+        tags$a(href = pdf_link, target = "_blank",
+               class = "btn btn-sm btn-outline-primary",
+               icon("file-pdf"), " View PDF")
+      } else {
+        tags$button(
+          class    = "btn btn-sm btn-outline-secondary",
+          disabled = NA,
+          title    = "No PDF linked. Check that a file named [article_num].pdf exists in the project Drive folder and run Sync.",
+          icon("file-pdf"), " No PDF"
+        )
+      }
+
+      # DOI link
+      doi <- row$doi_clean[1]
+      has_doi <- !is.null(doi)
+      if (has_doi) has_doi <- !is.na(doi)
+      if (has_doi) has_doi <- nchar(doi) > 0
+      doi_ui <- if (has_doi)
+        tags$a(href = paste0("https://doi.org/", doi), target = "_blank",
+               class = "small", doi)
+      else
+        span(class = "text-muted small fst-italic", "No DOI")
+
+      # Abstract
+      abs_txt <- row$abstract[1]
+      has_abs <- !is.null(abs_txt)
+      if (has_abs) has_abs <- !is.na(abs_txt)
+      if (has_abs) has_abs <- nchar(abs_txt) > 0
+
+      tagList(
+        # Article header card
+        div(class = "card mb-3",
+          div(class = "card-body",
+            div(class = "d-flex justify-content-between align-items-start",
+              div(class = "me-3",
+                h5(class = "card-title mb-1",
+                   row$title[1] %||% "Untitled"),
+                p(class = "mb-0 small text-muted",
+                  tags$strong(paste0("ID: ", if (!is.na(row$article_num[1])) row$article_num[1] else "")),
+                  span(class = "mx-1", "·"),
+                  row$author[1] %||% "Unknown author",
+                  span(class = "mx-1", "·"),
+                  row$year[1] %||% "",
+                  span(class = "mx-1", "·"),
+                  doi_ui
+                )
+              ),
+              pdf_btn
+            ),
+            # Collapsible abstract
+            if (has_abs) {
+              div(class = "mt-2",
+                tags$details(
+                  tags$summary(class = "text-muted small fw-semibold",
+                               style = "cursor:pointer;",
+                               icon("align-left"), " Abstract"),
+                  p(class = "small mt-1 mb-0", abs_txt)
+                )
+              )
+            }
+          )
+        ),
+
+        # Label form card
+        div(class = "card mb-3",
+          div(class = "card-header py-2",
+            strong(icon("tags"), " Label Form")
+          ),
+          div(class = "card-body",
+            uiOutput(ns("label_form"))
+          )
+        ),
+
+        # Action buttons
+        div(class = "d-flex gap-2 flex-wrap",
+          actionButton(ns("btn_save"),
+                       tagList(icon("save"), " Save"),
+                       class = "btn btn-success"),
+          actionButton(ns("btn_next"),
+                       tagList(icon("step-forward"), " Next"),
+                       class = "btn btn-primary"),
+          actionButton(ns("btn_skip"),
+                       tagList(icon("forward"), " Skip"),
+                       class = "btn btn-outline-warning"),
+          actionButton(ns("btn_refresh"),
+                       tagList(icon("sync"), " Refresh list"),
+                       class = "btn btn-outline-secondary btn-sm")
+        )
+      )
+    })
+
+    # --------------------------------------------------------
+    # Label form (re-renders when article or instances change)
+    # --------------------------------------------------------
+    output$label_form <- renderUI({
+      aid  <- current_article_id()
+      req(aid)
+      group_instances()   # explicit dependency so form re-renders on add/remove
+
+     tryCatch({
+      lbls <- project_labels()
+      if (!is.data.frame(lbls)) return(p(class = "text-muted fst-italic",
+                 "No labels defined. Add labels in the Labels tab."))
+      if (nrow(lbls) == 0)
+        return(p(class = "text-muted fst-italic",
+                 "No labels defined. Add labels in the Labels tab."))
+
+      meta     <- .load_meta(aid)
+      # Safely identify top-level labels (no parent)
+      pid_col  <- vapply(seq_len(nrow(lbls)), function(r)
+        as.character(lbls$parent_label_id[r] %||% "")[1], "")
+      pid_col[is.na(pid_col)] <- ""
+      top_lbls <- lbls[pid_col == "", , drop = FALSE]
+
+      # Ensure newly-added groups have at least one instance key
+      insts    <- group_instances()
+      changed  <- FALSE
+      for (gi in seq_len(nrow(top_lbls))) {
+        gl <- top_lbls[gi, ]
+        if (identical(as.character(gl$label_type)[1], "group")) {
+          gn <- as.character(gl$name)[1]
+          gn_insts <- insts[[gn]]
+          if (is.null(gn_insts)) {
+            existing <- meta[[gn]]
+            n_exist  <- if (is.list(existing)) {
+                          if (length(existing) > 0) length(existing) else 1L
+                        } else 1L
+            insts[[gn]] <- lapply(seq_len(n_exist), function(.) .new_key())
+            changed <- TRUE
+          } else if (length(gn_insts) == 0) {
+            existing <- meta[[gn]]
+            n_exist  <- if (is.list(existing)) {
+                          if (length(existing) > 0) length(existing) else 1L
+                        } else 1L
+            insts[[gn]] <- lapply(seq_len(n_exist), function(.) .new_key())
+            changed <- TRUE
+          }
+        }
+      }
+      if (changed) {
+        group_instances(insts)
+        # Return early — the reactive update will re-trigger this renderUI
+        return(NULL)
+      }
+
+      tagList(lapply(seq_len(nrow(top_lbls)), function(i) {
+        lbl <- as.list(top_lbls[i, ])
+        if (identical(lbl$label_type, "group")) {
+          .render_group(lbl, lbls, meta)
+        } else {
+          .render_field(lbl, val = meta[[lbl$name]], inst_key = NULL)
+        }
+      }))
+     }, error = function(e) {
+      div(class = "alert alert-danger",
+        h6("Label form error"),
+        p(conditionMessage(e)),
+        tags$pre(class = "small", paste(capture.output(traceback()), collapse = "\n"))
+      )
+     })
+    })
+
+    # ---- Helpers: safe scalar check -------------------------
+    # Replaces all && / || chains with a safe scalar function
+    # that will never error on length > 1 in R >= 4.2
+    .safe_scalar <- function(val) {
+      # Return scalar val[1] if val is non-NULL, length 1, non-NA scalar
+      # For lists/complex objects, returns NULL
+      if (is.null(val)) return(NULL)
+      if (is.list(val)) return(NULL)
+      if (length(val) != 1L) return(NULL)
+      v <- val[1L]
+      if (is.na(v)) return(NULL)
+      v
+    }
+
+    # ---- Helpers: UI renderers ----------------------------
+
+    # Render a single input field for one label
+    .render_field <- function(lbl, val = NULL, inst_key = NULL) {
+     tryCatch({
+      base_nm  <- if (!is.null(inst_key))
+        paste0("lbl_", lbl$name, "__", inst_key)
+      else
+        paste0("lbl_", lbl$name)
+      input_id <- ns(base_nm)
+
+      # Defensive scalar extraction — guards against length > 1 from DB
+      vtype    <- as.character(lbl$variable_type %||% "text")[1]
+      disp     <- as.character(lbl$display_name  %||% lbl$name)[1]
+      tip      <- as.character(lbl$instructions  %||% "")[1]
+      if (is.na(vtype)) vtype <- "text"
+      if (is.na(disp))  disp  <- as.character(lbl$name)[1]
+      if (is.na(tip))   tip   <- ""
+      is_mandatory <- isTRUE(as.logical(lbl$mandatory[1]))
+      mstar    <- if (is_mandatory)
+        span(class = "text-danger ms-1", "*") else NULL
+      lbl_ui   <- tagList(disp, mstar)
+
+      # Flatten val to scalar for types that expect it
+      # Uses .safe_scalar() to avoid any && / || on potentially non-scalar values
+      val1 <- .safe_scalar(val)
+
+      widget <- switch(vtype,
+
+        "text" =
+          textInput(input_id, lbl_ui,
+                    value = if (!is.null(val1)) as.character(val1) else ""),
+
+        "integer" =
+          numericInput(input_id, lbl_ui,
+                       value = if (!is.null(val1)) as.integer(val1) else NA_integer_,
+                       step = 1),
+
+        "numeric" =
+          numericInput(input_id, lbl_ui,
+                       value = if (!is.null(val1)) as.numeric(val1) else NA_real_),
+
+        "boolean" =
+          checkboxInput(input_id, lbl_ui, value = isTRUE(val1)),
+
+        "select one" = {
+          avs     <- unlist(lbl$allowed_values)
+          avs     <- if (!is.null(avs)) { if (length(avs) > 0) avs else character(0) } else character(0)
+          choices <- c("-- select --" = "", setNames(avs, avs))
+          sel     <- if (!is.null(val1)) as.character(val1) else ""
+          selectInput(input_id, lbl_ui, choices = choices, selected = sel)
+        },
+
+        "select multiple" = {
+          avs     <- unlist(lbl$allowed_values)
+          avs     <- if (!is.null(avs)) { if (length(avs) > 0) avs else character(0) } else character(0)
+          sel     <- unlist(val)
+          sel     <- if (!is.null(sel)) sel else character(0)
+          checkboxGroupInput(input_id, lbl_ui, choices = avs, selected = sel)
+        },
+
+        "YYYY-MM-DD" = {
+          dv <- tryCatch(as.Date(val1), error = function(e) NULL)
+          dateInput(input_id, lbl_ui, value = dv)
+        },
+
+        "bounding_box" = {
+          vb <- if (is.list(val)) val else list()
+          tagList(
+            p(class = "fw-semibold mb-1 small", lbl_ui),
+            div(class = "row g-2",
+              div(class = "col-6",
+                numericInput(ns(paste0(base_nm, "_lon_min")), "Lon min",
+                             value = vb$lon_min %||% NA_real_)),
+              div(class = "col-6",
+                numericInput(ns(paste0(base_nm, "_lon_max")), "Lon max",
+                             value = vb$lon_max %||% NA_real_)),
+              div(class = "col-6",
+                numericInput(ns(paste0(base_nm, "_lat_min")), "Lat min",
+                             value = vb$lat_min %||% NA_real_)),
+              div(class = "col-6",
+                numericInput(ns(paste0(base_nm, "_lat_max")), "Lat max",
+                             value = vb$lat_max %||% NA_real_))
+            )
+          )
+        },
+
+        "openstreetmap_location" = {
+          # Parse existing selected locations
+          osm_opts <- list()
+          osm_sel  <- character(0)
+
+          if (is.list(val)) {
+            # val can be a single location {name,lat,lon,osm_id,geojson} or a list of them
+            locs <- if (!is.null(val$name)) list(val) else val
+            for (loc in locs) {
+              if (is.list(loc) && !is.null(loc$name)) {
+                obj <- list(
+                  name   = loc$name %||% "",
+                  lat    = as.numeric(loc$lat %||% NA),
+                  lon    = as.numeric(loc$lon %||% NA),
+                  osm_id = as.character(loc$osm_id %||% "")
+                )
+                if (!is.null(loc$geojson)) obj$geojson <- loc$geojson
+                enc <- as.character(jsonlite::toJSON(obj, auto_unbox = TRUE))
+                osm_opts <- c(osm_opts, list(list(value = enc, label = loc$name)))
+                osm_sel  <- c(osm_sel, enc)
+              }
+            }
+          }
+
+          tagList(
+            selectizeInput(input_id, lbl_ui,
+              choices  = NULL,
+              multiple = TRUE,
+              options  = list(
+                create       = FALSE,
+                persist      = FALSE,
+                valueField   = "value",
+                labelField   = "label",
+                searchField  = "label",
+                options      = osm_opts,
+                items        = as.list(osm_sel),
+                loadThrottle = 300,
+                load = I("function(query, callback) {
+                  if (query.length < 3) return callback();
+                  fetch('https://nominatim.openstreetmap.org/search?format=json&polygon_geojson=1&limit=10&q=' +
+                        encodeURIComponent(query),
+                        {headers: {'Accept': 'application/json'}})
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                      callback(data.map(function(d) {
+                        var obj = {
+                            name:   d.display_name,
+                            lat:    parseFloat(d.lat),
+                            lon:    parseFloat(d.lon),
+                            osm_id: String(d.osm_id)
+                        };
+                        if (d.geojson) { obj.geojson = d.geojson; }
+                        return {
+                          value: JSON.stringify(obj),
+                          label: d.display_name
+                        };
+                      }));
+                    })
+                    .catch(function() { callback(); });
+                }"),
+                render = I("{
+                  option: function(item, escape) {
+                    return '<div>' + escape(item.label) + '</div>';
+                  },
+                  item: function(item, escape) {
+                    var lbl = item.label;
+                    try {
+                      var d = JSON.parse(item.value);
+                      lbl = d.name || item.label;
+                      if (d.lat && d.lon) {
+                        lbl += ' (' + Number(d.lat).toFixed(2) + ', ' + Number(d.lon).toFixed(2) + ')';
+                      }
+                    } catch(e) {}
+                    return '<div>' + escape(lbl) + '</div>';
+                  }
+                }")
+              )
+            ),
+            tags$small(class = "text-muted",
+                       "Type at least 3 characters to search OpenStreetMap")
+          )
+        },
+
+        "effect_size" = {
+          # Phase 9 will replace this stub with mod_effect_size_ui
+          div(class = "alert alert-info py-2 small",
+            icon("info-circle"), " Effect size entry will be available in Phase 9.")
+        },
+
+        # Fallback
+        textInput(input_id, lbl_ui,
+                  value = if (!is.null(val1)) as.character(val1) else "")
+      )
+
+      div(class = "mb-3",
+        if (nchar(tip) > 0L) div(widget, title = tip) else widget
+      )
+     }, error = function(e) {
+      div(class = "alert alert-warning py-1 small mb-3",
+        paste0("Field error (", lbl$name, "): ", conditionMessage(e)))
+     })
+    }
+
+    # Render a group label container with dynamic instance cards
+    .render_group <- function(grp_lbl, all_lbls, meta) {
+     tryCatch({
+      gname      <- as.character(grp_lbl$name)[1]
+      disp_name  <- as.character(grp_lbl$display_name %||% gname)[1]
+      # Safely find child labels
+      cpid <- vapply(seq_len(nrow(all_lbls)), function(r)
+        as.character(all_lbls$parent_label_id[r] %||% "")[1], "")
+      cpid[is.na(cpid)] <- ""
+      child_lbls <- all_lbls[cpid == as.character(grp_lbl$label_id)[1], ,
+                              drop = FALSE]
+      existing   <- meta[[gname]]
+      if (!is.list(existing)) existing <- list()
+
+      inst_keys  <- group_instances()[[gname]]
+      if (is.null(inst_keys)) inst_keys <- list()
+      n          <- length(inst_keys)
+
+      div(class = "mb-4",
+        div(class = "d-flex align-items-center mb-2 gap-2",
+          h6(class = "mb-0 fw-bold", icon("layer-group"), " ", disp_name),
+          tags$button(
+            class   = "btn btn-sm btn-outline-primary",
+            onclick = sprintf(
+              'Shiny.setInputValue("%s", "%s", {priority:"event"});',
+              ns("add_instance"), gname),
+            icon("plus"), " Add Instance"
+          )
+        ),
+        if (n == 0)
+          p(class = "text-muted fst-italic small",
+            "No instances yet. Click 'Add Instance' to begin.")
+        else
+          tagList(lapply(seq_len(n), function(j) {
+            key       <- inst_keys[[j]]
+            inst_meta <- if (j <= length(existing)) existing[[j]] else list()
+
+            div(class = "card mb-2 border-secondary",
+              div(class = "card-header py-1 d-flex justify-content-between align-items-center bg-light",
+                span(class = "fw-semibold small",
+                     sprintf("Instance %d", j)),
+                tags$button(
+                  class   = "btn btn-sm btn-outline-danger",
+                  onclick = sprintf(
+                    'Shiny.setInputValue("%s", {g:"%s",j:%d}, {priority:"event"});',
+                    ns("remove_instance"), gname, j),
+                  icon("trash"), " Remove"
+                )
+              ),
+              div(class = "card-body py-2",
+                if (nrow(child_lbls) == 0)
+                  p(class = "text-muted small",
+                    "No child labels defined for this group.")
+                else
+                  tagList(lapply(seq_len(nrow(child_lbls)), function(k) {
+                    child <- as.list(child_lbls[k, ])
+                    .render_field(child,
+                                  val      = inst_meta[[child$name]],
+                                  inst_key = key)
+                  }))
+              )
+            )
+          }))
+      )
+     }, error = function(e) {
+      div(class = "alert alert-danger py-1 small mb-4",
+        paste0("Group error (", grp_lbl$name, "): ", conditionMessage(e)))
+     })
+    }
+
+    # --------------------------------------------------------
+    # Group instance management observers
+    # --------------------------------------------------------
+    observeEvent(input$add_instance, {
+      gname <- as.character(input$add_instance)[1]
+      req(nchar(gname) > 0)
+      insts <- group_instances()
+      if (is.null(insts[[gname]])) insts[[gname]] <- list()
+      insts[[gname]] <- c(insts[[gname]], list(.new_key()))
+      group_instances(insts)
+    })
+
+    observeEvent(input$remove_instance, {
+      info <- input$remove_instance
+      req(info$g, info$j)
+      insts <- group_instances()
+      keys  <- insts[[info$g]]
+      if (!is.null(keys)) {
+        if (length(keys) >= info$j)
+          insts[[info$g]] <- keys[-info$j]
+      }
+      group_instances(insts)
+    })
+
+    # --------------------------------------------------------
+    # Collect label values from current inputs
+    # --------------------------------------------------------
+    .collect_values <- function() {
+      lbls <- project_labels()
+      if (!is.data.frame(lbls) || nrow(lbls) == 0) return(list())
+
+      insts    <- group_instances()
+      result   <- list()
+      # Safely identify top-level labels
+      pid_col  <- vapply(seq_len(nrow(lbls)), function(r)
+        as.character(lbls$parent_label_id[r] %||% "")[1], "")
+      pid_col[is.na(pid_col)] <- ""
+      top_lbls <- lbls[pid_col == "", , drop = FALSE]
+
+      for (i in seq_len(nrow(top_lbls))) {
+        lbl   <- as.list(top_lbls[i, ])
+        vtype <- as.character(lbl$variable_type %||% "text")[1]
+        nm    <- as.character(lbl$name)[1]
+
+        if (identical(lbl$label_type, "group")) {
+          # Collect one value-list per instance
+          cpid <- vapply(seq_len(nrow(lbls)), function(r)
+            as.character(lbls$parent_label_id[r] %||% "")[1], "")
+          cpid[is.na(cpid)] <- ""
+          child_lbls  <- lbls[cpid == as.character(lbl$label_id)[1], , drop = FALSE]
+          group_keys  <- insts[[nm]]
+          if (is.null(group_keys)) group_keys <- list()
+          inst_values <- lapply(group_keys, function(key) {
+            iv <- list()
+            for (k in seq_len(nrow(child_lbls))) {
+              cl    <- as.list(child_lbls[k, ])
+              raw   <- input[[paste0("lbl_", cl$name, "__", key)]]
+              if (!is.null(raw))
+                iv[[cl$name]] <- .coerce_value(cl$variable_type %||% "text", raw)
+            }
+            iv
+          })
+          result[[nm]] <- inst_values
+
+        } else if (identical(vtype, "bounding_box")) {
+          base <- paste0("lbl_", nm)
+          result[[nm]] <- list(
+            lon_min = input[[paste0(base, "_lon_min")]],
+            lon_max = input[[paste0(base, "_lon_max")]],
+            lat_min = input[[paste0(base, "_lat_min")]],
+            lat_max = input[[paste0(base, "_lat_max")]]
+          )
+
+        } else if (identical(vtype, "openstreetmap_location")) {
+          raw <- input[[paste0("lbl_", nm)]]
+          if (!is.null(raw)) { if (length(raw) > 0) {
+            result[[nm]] <- lapply(raw, function(v) {
+              tryCatch(
+                jsonlite::fromJSON(v, simplifyVector = FALSE),
+                error = function(e) list(name = as.character(v))
+              )
+            })
+          }}
+
+        } else if (!identical(vtype, "effect_size")) {
+          raw <- input[[paste0("lbl_", nm)]]
+          if (!is.null(raw))
+            result[[nm]] <- .coerce_value(vtype, raw)
+        }
+      }
+      result
+    }
+
+    .coerce_value <- function(vtype, val) {
+      switch(vtype,
+        "integer"         = as.integer(val),
+        "numeric"         = as.numeric(val),
+        "boolean"         = isTRUE(val),
+        "select multiple" = as.list(val),
+        "openstreetmap_location" = {
+          # val is a character vector of JSON strings from selectizeInput
+          lapply(val, function(v) {
+            tryCatch(
+              jsonlite::fromJSON(v, simplifyVector = FALSE),
+              error = function(e) list(name = as.character(v))
+            )
+          })
+        },
+        val
+      )
+    }
+
+    # --------------------------------------------------------
+    # Audit log helper
+    # --------------------------------------------------------
+    .write_audit <- function(article_id, action,
+                              old_json = NULL, new_json = NULL) {
+      tryCatch({
+        body <- list(
+          project_id = project_id(),
+          user_id    = session_rv$user_id,
+          article_id = article_id,
+          action     = action,
+          timestamp  = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+        )
+        if (!is.null(old_json))
+          body$old_json <- jsonlite::toJSON(old_json, auto_unbox = TRUE)
+        if (!is.null(new_json))
+          body$new_json <- jsonlite::toJSON(new_json, auto_unbox = TRUE)
+        sb_post("audit_log", body, token = session_rv$token)
+      }, error = function(e) {
+        # Non-fatal — log to console only
+        message("[audit_log] write failed: ", e$message)
+      })
+    }
+
+    # --------------------------------------------------------
+    # Concurrency conflict check
+    # --------------------------------------------------------
+    .has_conflict <- function(article_id) {
+      la <- loaded_at()
+      if (is.null(la)) return(FALSE)
+      tryCatch({
+        rows <- sb_get("audit_log",
+          filters = list(
+            article_id = article_id,
+            action     = "save",
+            user_id    = paste0("neq.", session_rv$user_id),
+            timestamp  = paste0("gt.", format(la, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"))
+          ),
+          select = "log_id",
+          token  = session_rv$token)
+        if (is.data.frame(rows)) nrow(rows) > 0 else FALSE
+      }, error = function(e) FALSE)
+    }
+
+    # --------------------------------------------------------
+    # Core save logic (shared by Save and Next)
+    # --------------------------------------------------------
+    .do_save <- function() {
+      aid <- current_article_id()
+      req(aid, session_rv$token)
+
+      vals <- .collect_values()
+
+      # Snapshot old metadata for audit log
+      old_meta <- tryCatch({
+        rows <- sb_get("article_metadata_json",
+          filters = list(article_id = aid),
+          select  = "json_data",
+          token   = session_rv$token)
+        if (is.data.frame(rows)) { if (nrow(rows) > 0) rows$json_data[1] else NULL } else NULL
+      }, error = function(e) NULL)
+
+      # Upsert metadata
+      sb_upsert("article_metadata_json",
+        list(article_id = aid,
+             json_data  = jsonlite::toJSON(vals, auto_unbox = TRUE)),
+        on_conflict = "article_id",
+        token       = session_rv$token)
+
+      # Update article review status
+      tryCatch(
+        sb_patch("articles", "article_id", aid,
+          list(review_status = "reviewed",
+               reviewed_by   = session_rv$user_id,
+               reviewed_at   = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ",
+                                      tz = "UTC")),
+          token = session_rv$token),
+        error = function(e)
+          showNotification(paste("Status update failed:", e$message),
+                            type = "warning")
+      )
+
+      # Audit log
+      .write_audit(aid, "save", old_json = old_meta, new_json = vals)
+
+      # Concurrency warning
+      if (.has_conflict(aid)) {
+        showNotification(
+          paste("Another reviewer saved changes to this article since you loaded it.",
+                "Your save has been recorded. Review the audit log to check for conflicts."),
+          type = "warning", duration = 12
+        )
+      } else {
+        showNotification("Saved successfully.", type = "message", duration = 3)
+      }
+
+      articles_refresh(articles_refresh() + 1L)
+      invisible(TRUE)
+    }
+
+    # ---- Navigate to next unreviewed article ---------------
+    .go_next <- function() {
+      df  <- all_articles()
+      aid <- current_article_id()
+      if (!is.data.frame(df) || nrow(df) == 0) return()
+      unrev <- df[df$review_status == "unreviewed" &
+                    df$article_id != aid, , drop = FALSE]
+      if (nrow(unrev) > 0)
+        .select_article(unrev$article_id[1])
+      else
+        showNotification("All articles have been reviewed or skipped.",
+                         type = "message")
+    }
+
+    # --------------------------------------------------------
+    # Action button observers
+    # --------------------------------------------------------
+    observeEvent(input$btn_save, {
+      tryCatch(.do_save(), error = function(e)
+        showNotification(paste("Save failed:", e$message), type = "error"))
+    })
+
+    observeEvent(input$btn_next, {
+      ok <- tryCatch({ .do_save(); TRUE },
+                     error = function(e) {
+                       showNotification(paste("Save failed:", e$message),
+                                        type = "error")
+                       FALSE
+                     })
+      if (ok) .go_next()
+    })
+
+    observeEvent(input$btn_skip, {
+      aid <- current_article_id()
+      req(aid, session_rv$token)
+      tryCatch({
+        sb_patch("articles", "article_id", aid,
+          list(review_status = "skipped"),
+          token = session_rv$token)
+        .write_audit(aid, "skip")
+        showNotification("Article skipped.", type = "message", duration = 3)
+        articles_refresh(articles_refresh() + 1L)
+        .go_next()
+      }, error = function(e)
+        showNotification(paste("Skip failed:", e$message), type = "error"))
+    })
+
   })
 }

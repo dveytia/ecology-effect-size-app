@@ -229,12 +229,37 @@ Create public Drive folder. Add 3 valid PDFs + 1 invalid name. Paste URL, click 
 **Branch:** `phase-7-review`
 
 **Deliverables:**
-- `modules/mod_review.R` — full implementation
+- `modules/mod_review.R` — full implementation ✅
 
 **Validation Gate 7:**
 Review 3 articles end-to-end (all labels, label group with 3 instances, skip). Verify with label types: text, select one, select multiple, boolean, openstreetmap_location. Reload and verify data persisted. Two reviewers open same article simultaneously; second save receives conflict warning.
 
-**Status:** [ ] Not started
+**Implementation notes:**
+- Two-column layout: scrollable article list sidebar (col-lg-3) + review panel (col-lg-9).
+- Article sidebar shows status icons (reviewed ✅ / skipped ⏩ / unreviewed ●), title truncated at 52 chars, author and year sub-text. Active article highlighted in blue.
+- Search bar filters the article list by article_num, title, or author (case-insensitive).
+- Progress badge shows "Progress: N / Total" based on `review_status` in `articles`.
+- On project load, the first `unreviewed` article is auto-selected. If all are reviewed/skipped, the first article is selected.
+- Label form rendered from `project_labels` reactive (fetched via `sb_get("labels", ...)`). Labels sorted by `order_index`.
+- All 10 variable types rendered:
+  - `text` → `textInput`; `integer` / `numeric` → `numericInput`; `boolean` → `checkboxInput`
+  - `select one` → `selectInput`; `select multiple` → `checkboxGroupInput`
+  - `YYYY-MM-DD` → `dateInput`; `bounding_box` → 4×`numericInput` (lon_min/max, lat_min/max)
+  - `openstreetmap_location` → `textInput` (Phase 11 can add autocomplete)
+  - `effect_size` → stub alert panel (Phase 9 will replace with `mod_effect_size_ui`)
+- Label groups: rendered as collapsible instance cards. Each instance gets a unique key (`inst_key`) so multiple instances of the same group have distinct Shiny input IDs: `lbl_{name}__{key}`.
+- `group_instances` reactiveVal stores `list(group_name = list(key1, key2, ...))`. Adding an instance appends a new key; removing slides it out. The form re-renders via `output$label_form` which reads `group_instances()`.
+- On article load, existing group instances in `article_metadata_json` are counted; one instance key is created per existing entry so prior data is restored into the correct input IDs.
+- **Save** action: calls `sb_upsert("article_metadata_json", ...)` (`on_conflict = "article_id"`), then `sb_patch("articles", ...)` setting `review_status = "reviewed"`, then writes an `audit_log` entry with `action = "save"` and old/new JSON snapshots.
+- **Next** action: saves first (same as Save), then navigates to the next `unreviewed` article.
+- **Skip** action: patches `review_status = "skipped"` without saving metadata, writes `audit_log` entry with `action = "skip"`, then navigates to next unreviewed.
+- **Concurrency check** (spec §7.3): on every Save, `audit_log` is queried for any row where `article_id = current`, `action = save`, `user_id != current_user`, and `timestamp > loaded_at`. If found, a 12-second warning toast is shown. Save is never blocked; last-write-wins.
+- `mod_review_server` is called once in `mod_project_home_server`; `project_id` is passed as a reactive.
+- Effect size section (Phase 9) is a placeholder alert. The `effect_size` variable_type is recognised but renders a stub; no `effect_sizes` table writes in Phase 7.
+
+**Pre-flight:** No new SQL required for Phase 7 (all tables already exist).
+
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
 
@@ -307,6 +332,7 @@ Reviewer JWT cannot access another project's articles directly (API returns 403)
 | 2026-02-21 | Phase 2 authentication implemented | `R/auth.R` refresh/guard fully implemented; `server.R` gains `refresh_token` field and 30 s auto-refresh timer |
 | 2026-02-21 | Phase 3 dashboard & projects implemented | Full project CRUD, invite/leave membership, project home with tab stubs. `sb_delete_where` added to `R/supabase.R`. `server.R` updated to three-state page router. `mod_project_home_server` now receives `app_state`. Run `sql/02_rls_policies.sql` before Gate 3 validation. |
 | 2026-02-22 | Phase 6 Google Drive integration implemented | `R/gdrive.R` fully implemented; `sql/07_gdrive_columns.sql` adds `article_num` to articles and ensures Drive columns exist on projects. Edit Project modal gains Drive URL + Sync Now. `global.R` calls `gdrive_init()` at startup. |
+| 2026-02-22 | Phase 7 Review Interface implemented | `modules/mod_review.R` fully implemented; wired into `mod_project_home.R` replacing the Phase 7 stub. Dynamic label form (all 10 variable types), label groups with multi-instance add/remove, Save/Next/Skip actions, concurrency conflict detection, audit log writes. Effect size fields stubbed for Phase 9. |
 
 ---
 
