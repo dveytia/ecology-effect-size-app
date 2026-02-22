@@ -71,3 +71,63 @@ body {
 .audit-action-save   { color: #2e7d32; font-weight: 600; }
 .audit-action-skip   { color: #e65100; font-weight: 600; }
 .audit-action-delete { color: #c62828; font-weight: 600; }
+
+/* ---- Effect size pathway colour coding ------------------- */
+/* Pathway A – Primary (green tint) */
+.es-pathway-a {
+  border-left: 4px solid #4caf50;
+  background: rgba(76, 175, 80, 0.06);
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  border-radius: 0 6px 6px 0;
+}
+
+/* Pathway B – Fallback 1 (blue tint) */
+.es-pathway-b {
+  border-left: 4px solid #2196f3;
+  background: rgba(33, 150, 243, 0.06);
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  border-radius: 0 6px 6px 0;
+}
+
+/* Pathway C – Fallback 2 (amber tint) */
+.es-pathway-c {
+  border-left: 4px solid #ff9800;
+  background: rgba(255, 152, 0, 0.06);
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.5rem;
+  border-radius: 0 6px 6px 0;
+}
+
+/* ---- Pathway legend -------------------------------------- */
+.es-pathway-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.35rem 0.5rem;
+  background: #f8f9fa;
+  border-radius: 4px;
+}
+
+.es-legend-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+}
+
+.es-legend-swatch.es-pathway-a {
+  border-left-width: 3px;
+}
+
+.es-legend-swatch.es-pathway-b {
+  border-left-width: 3px;
+}
+
+.es-legend-swatch.es-pathway-c {
+  border-left-width: 3px;
+}

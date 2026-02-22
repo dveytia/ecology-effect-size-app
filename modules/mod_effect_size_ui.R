@@ -81,7 +81,7 @@
 
 mod_effect_size_ui_ui <- function(id) {
   ns <- NS(id)
-  div(class = "effect-size-block",
+  div(class = "effect-size-block p-3",
     h5(icon("calculator"), " Effect Size"),
 
     # ---- General fields (all designs) ----
@@ -147,8 +147,28 @@ mod_effect_size_ui_ui <- function(id) {
       )
     ),
 
+    # ---- Calculate button ----
+    div(class = "d-flex gap-2 mb-3",
+      actionButton(ns("btn_calculate"),
+                   tagList(icon("calculator"), " Calculate effect size"),
+                   class = "btn btn-info")
+    ),
+
     # ---- Effect size result display ----
     uiOutput(ns("es_result_display"))
+  )
+}
+
+# ---- Pathway legend helper --------------------------------------------------
+.pathway_legend <- function(pathways) {
+  # pathways: named list like list("Pathway A" = "es-pathway-a", ...)
+  div(class = "es-pathway-legend mb-2",
+    tags$small(class = "fw-semibold", "Conversion pathways:"),
+    do.call(tagList, lapply(names(pathways), function(nm) {
+      tags$span(class = paste("es-legend-swatch", pathways[[nm]]),
+        nm
+      )
+    }))
   )
 }
 
@@ -157,6 +177,12 @@ mod_effect_size_ui_ui <- function(id) {
 .render_ct_fields <- function(ns, prefix = "") {
   p <- function(x) ns(paste0(prefix, x))
   tagList(
+    # Pathway legend
+    .pathway_legend(list(
+      "Primary: means + variability \u2192 Hedges g \u2192 r" = "es-pathway-a",
+      "Fallback 1: t-stat + df \u2192 r"                    = "es-pathway-b",
+      "Fallback 2: F-stat + df \u2192 t \u2192 r"           = "es-pathway-c"
+    )),
     div(class = "row g-2",
       div(class = "col-md-6",
         textInput(p("control_description"), "Control description",
@@ -167,65 +193,78 @@ mod_effect_size_ui_ui <- function(id) {
                   placeholder = "Brief description of treatment condition")
       )
     ),
-    div(class = "row g-2",
-      div(class = "col-md-6",
-        numericInput(p("mean_control"), "Mean (control)", value = NA_real_)
+    # Primary pathway: means + variability + sample sizes
+    div(class = "es-pathway-a",
+      div(class = "row g-2",
+        div(class = "col-md-6",
+          numericInput(p("mean_control"), "Mean (control)", value = NA_real_)
+        ),
+        div(class = "col-md-6",
+          numericInput(p("mean_treatment"), "Mean (treatment)", value = NA_real_)
+        )
       ),
-      div(class = "col-md-6",
-        numericInput(p("mean_treatment"), "Mean (treatment)", value = NA_real_)
+      div(class = "row g-2",
+        div(class = "col-md-4",
+          selectInput(p("var_statistic_type"),
+                      tags$span("Variability type",
+                        title = "What type of variability is reported?"),
+                      choices = .var_stat_type_choices)
+        ),
+        div(class = "col-md-4",
+          numericInput(p("var_value_control"), "Variability (control)",
+                       value = NA_real_)
+        ),
+        div(class = "col-md-4",
+          numericInput(p("var_value_treatment"), "Variability (treatment)",
+                       value = NA_real_)
+        )
+      ),
+      div(class = "row g-2",
+        div(class = "col-md-6",
+          numericInput(p("n_control"), "n (control)", value = NA_integer_,
+                       step = 1)
+        ),
+        div(class = "col-md-6",
+          numericInput(p("n_treatment"), "n (treatment)", value = NA_integer_,
+                       step = 1)
+        )
       )
     ),
-    div(class = "row g-2",
-      div(class = "col-md-4",
-        selectInput(p("var_statistic_type"),
-                    tags$span("Variability type",
-                      title = "What type of variability is reported?"),
-                    choices = .var_stat_type_choices)
-      ),
-      div(class = "col-md-4",
-        numericInput(p("var_value_control"), "Variability (control)",
-                     value = NA_real_)
-      ),
-      div(class = "col-md-4",
-        numericInput(p("var_value_treatment"), "Variability (treatment)",
-                     value = NA_real_)
+    # Fallback 1: t-stat + df
+    div(class = "es-pathway-b",
+      div(class = "row g-2",
+        div(class = "col-md-6",
+          numericInput(p("t_stat"),
+                       tags$span("t-statistic",
+                         title = 'Look for t = or a value in parentheses, e.g. t(24) = 2.3'),
+                       value = NA_real_)
+        ),
+        div(class = "col-md-6",
+          numericInput(p("df"),
+                       tags$span("Degrees of freedom (df)",
+                         title = 'Look for \"df =\", or the number in parentheses after t, e.g. t(24): df = 24. For F(1, 45): df = 45 (use the second number).'),
+                       value = NA_real_)
+        )
       )
     ),
-    div(class = "row g-2",
-      div(class = "col-md-6",
-        numericInput(p("n_control"), "n (control)", value = NA_integer_,
-                     step = 1)
-      ),
-      div(class = "col-md-6",
-        numericInput(p("n_treatment"), "n (treatment)", value = NA_integer_,
-                     step = 1)
+    # Fallback 2: F-stat (shares df from above)
+    div(class = "es-pathway-c",
+      div(class = "row g-2",
+        div(class = "col-md-4",
+          numericInput(p("F_stat"),
+                       tags$span("F-statistic",
+                         title = "Look for F = in ANOVA tables"),
+                       value = NA_real_)
+        ),
+        div(class = "col-md-4",
+          numericInput(p("chi_square_stat"), "Chi\u00b2 statistic",
+                       value = NA_real_)
+        ),
+        div(class = "col-md-4",
+          numericInput(p("p_value"), "p-value", value = NA_real_)
+        )
       )
     ),
-    div(class = "row g-2",
-      div(class = "col-md-3",
-        numericInput(p("t_stat"),
-                     tags$span("t-statistic",
-                       title = 'Look for t = or a value in parentheses, e.g. t(24) = 2.3'),
-                     value = NA_real_)
-      ),
-      div(class = "col-md-3",
-        numericInput(p("F_stat"),
-                     tags$span("F-statistic",
-                       title = "Look for F = in ANOVA tables"),
-                     value = NA_real_)
-      ),
-      div(class = "col-md-3",
-        numericInput(p("chi_square_stat"), "Chi\u00b2 statistic",
-                     value = NA_real_)
-      ),
-      div(class = "col-md-3",
-        numericInput(p("p_value"), "p-value", value = NA_real_)
-      )
-    ),
-    numericInput(p("df"),
-                 tags$span("Degrees of freedom (df)",
-                   title = 'Look for "df =", or the number in parentheses after t, e.g. t(24): df = 24. For F(1, 45): df = 45 (use the second number).'),
-                 value = NA_real_),
     # Small SD toggle (visibility controlled by server)
     uiOutput(ns(paste0(prefix, "small_sd_panel")))
   )
@@ -234,44 +273,58 @@ mod_effect_size_ui_ui <- function(id) {
 .render_corr_fields <- function(ns, prefix = "") {
   p <- function(x) ns(paste0(prefix, x))
   tagList(
-    div(class = "row g-2",
-      div(class = "col-md-4",
-        numericInput(p("r_reported"),
-                     tags$span("r (reported)",
-                       title = "Pearson r or Spearman rho as reported. Range: -1 to 1"),
-                     value = NA_real_, min = -1, max = 1, step = 0.01)
-      ),
-      div(class = "col-md-4",
-        numericInput(p("se_r"), "SE of r", value = NA_real_)
-      ),
-      div(class = "col-md-4",
-        numericInput(p("n"), "Sample size (n)", value = NA_integer_, step = 1)
+    .pathway_legend(list(
+      "Primary: r (reported)"                = "es-pathway-a",
+      "Fallback 1: covariance / (SD_X \u00d7 SD_Y)" = "es-pathway-b",
+      "Fallback 2: t-stat + df \u2192 r"     = "es-pathway-c"
+    )),
+    # Primary: direct r
+    div(class = "es-pathway-a",
+      div(class = "row g-2",
+        div(class = "col-md-4",
+          numericInput(p("r_reported"),
+                       tags$span("r (reported)",
+                         title = "Pearson r or Spearman rho as reported. Range: -1 to 1"),
+                       value = NA_real_, min = -1, max = 1, step = 0.01)
+        ),
+        div(class = "col-md-4",
+          numericInput(p("se_r"), "SE of r", value = NA_real_)
+        ),
+        div(class = "col-md-4",
+          numericInput(p("n"), "Sample size (n)", value = NA_integer_, step = 1)
+        )
       )
     ),
-    div(class = "row g-2",
-      div(class = "col-md-4",
-        numericInput(p("covariance_XY"), "Covariance (X, Y)",
-                     value = NA_real_)
-      ),
-      div(class = "col-md-4",
-        numericInput(p("sd_X"), "SD of X", value = NA_real_)
-      ),
-      div(class = "col-md-4",
-        numericInput(p("sd_Y"), "SD of Y", value = NA_real_)
+    # Fallback 1: covariance path
+    div(class = "es-pathway-b",
+      div(class = "row g-2",
+        div(class = "col-md-4",
+          numericInput(p("covariance_XY"), "Covariance (X, Y)",
+                       value = NA_real_)
+        ),
+        div(class = "col-md-4",
+          numericInput(p("sd_X"), "SD of X", value = NA_real_)
+        ),
+        div(class = "col-md-4",
+          numericInput(p("sd_Y"), "SD of Y", value = NA_real_)
+        )
       )
     ),
-    div(class = "row g-2",
-      div(class = "col-md-6",
-        numericInput(p("t_stat"),
-                     tags$span("t-statistic",
-                       title = 'Look for t = or a value in parentheses'),
-                     value = NA_real_)
-      ),
-      div(class = "col-md-6",
-        numericInput(p("df"),
-                     tags$span("Degrees of freedom",
-                       title = "For correlation tests, df is usually n \u2212 2."),
-                     value = NA_real_)
+    # Fallback 2: t-stat path
+    div(class = "es-pathway-c",
+      div(class = "row g-2",
+        div(class = "col-md-6",
+          numericInput(p("t_stat"),
+                       tags$span("t-statistic",
+                         title = 'Look for t = or a value in parentheses'),
+                       value = NA_real_)
+        ),
+        div(class = "col-md-6",
+          numericInput(p("df"),
+                       tags$span("Degrees of freedom",
+                         title = "For correlation tests, df is usually n \u2212 2."),
+                       value = NA_real_)
+        )
       )
     )
   )
@@ -280,41 +333,52 @@ mod_effect_size_ui_ui <- function(id) {
 .render_regression_fields <- function(ns, prefix = "") {
   p <- function(x) ns(paste0(prefix, x))
   tagList(
+    .pathway_legend(list(
+      "Primary: t-stat + df \u2192 r"                   = "es-pathway-a",
+      "Fallback: \u03b2 \u00d7 (SD_X / SD_Y) \u2192 r" = "es-pathway-b"
+    )),
+    # Primary: t-stat path
+    div(class = "es-pathway-a",
+      div(class = "row g-2",
+        div(class = "col-md-4",
+          numericInput(p("t_stat"),
+                       tags$span("t-statistic",
+                         title = "t-statistic for the coefficient"),
+                       value = NA_real_)
+        ),
+        div(class = "col-md-4",
+          numericInput(p("df"),
+                       tags$span("Residual df",
+                         title = 'Look for df in regression output. For F(1, 45), use 45 (the second number).'),
+                       value = NA_real_)
+        ),
+        div(class = "col-md-4",
+          numericInput(p("n"), "Sample size (n)", value = NA_integer_, step = 1)
+        )
+      )
+    ),
+    # Fallback: beta + SDs
+    div(class = "es-pathway-b",
+      div(class = "row g-2",
+        div(class = "col-md-4",
+          numericInput(p("beta"), "Regression coefficient (\u03b2)",
+                       value = NA_real_)
+        ),
+        div(class = "col-md-4",
+          numericInput(p("sd_X"), "SD of predictor", value = NA_real_)
+        ),
+        div(class = "col-md-4",
+          numericInput(p("sd_Y"), "SD of response", value = NA_real_)
+        )
+      )
+    ),
+    # Additional fields (not pathway-specific)
     div(class = "row g-2",
-      div(class = "col-md-4",
-        numericInput(p("beta"), "Regression coefficient (\u03b2)",
-                     value = NA_real_)
-      ),
       div(class = "col-md-4",
         numericInput(p("se_beta"), "SE of \u03b2", value = NA_real_)
       ),
       div(class = "col-md-4",
-        numericInput(p("n"), "Sample size (n)", value = NA_integer_, step = 1)
-      )
-    ),
-    div(class = "row g-2",
-      div(class = "col-md-4",
-        numericInput(p("t_stat"),
-                     tags$span("t-statistic",
-                       title = "t-statistic for the coefficient"),
-                     value = NA_real_)
-      ),
-      div(class = "col-md-4",
         numericInput(p("p_value"), "p-value", value = NA_real_)
-      ),
-      div(class = "col-md-4",
-        numericInput(p("df"),
-                     tags$span("Residual df",
-                       title = 'Look for df in regression output. For F(1, 45), use 45 (the second number).'),
-                     value = NA_real_)
-      )
-    ),
-    div(class = "row g-2",
-      div(class = "col-md-6",
-        numericInput(p("sd_X"), "SD of predictor", value = NA_real_)
-      ),
-      div(class = "col-md-6",
-        numericInput(p("sd_Y"), "SD of response", value = NA_real_)
       )
     ),
     checkboxInput(p("multiple_predictors"),
@@ -327,6 +391,9 @@ mod_effect_size_ui_ui <- function(id) {
 .render_interaction_a_fields <- function(ns, prefix = "") {
   p <- function(x) ns(paste0(prefix, x))
   tagList(
+    .pathway_legend(list(
+      "t-stat + df \u2192 r" = "es-pathway-a"
+    )),
     div(class = "row g-2",
       div(class = "col-md-6",
         numericInput(p("interaction_term"), "Interaction term coefficient",
@@ -337,15 +404,17 @@ mod_effect_size_ui_ui <- function(id) {
                      value = NA_real_)
       )
     ),
-    div(class = "row g-2",
-      div(class = "col-md-6",
-        numericInput(p("t_stat"),
-                     tags$span("t-statistic",
-                       title = "t-statistic for the interaction term"),
-                     value = NA_real_)
-      ),
-      div(class = "col-md-6",
-        numericInput(p("df"), "Degrees of freedom", value = NA_real_)
+    div(class = "es-pathway-a",
+      div(class = "row g-2",
+        div(class = "col-md-6",
+          numericInput(p("t_stat"),
+                       tags$span("t-statistic",
+                         title = "t-statistic for the interaction term"),
+                       value = NA_real_)
+        ),
+        div(class = "col-md-6",
+          numericInput(p("df"), "Degrees of freedom", value = NA_real_)
+        )
       )
     )
   )
@@ -924,6 +993,30 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
         multiple_predictors = isTRUE(input[[paste0(prefix, "multiple_predictors")]])
       )
     }
+
+    # ---- Calculate button: compute only (no DB write) ----
+    observeEvent(input$btn_calculate, {
+      es_inputs <- collect_es_inputs()
+      if (is.null(es_inputs)) {
+        showNotification("Please select a study design first.",
+                         type = "warning")
+        return()
+      }
+
+      computed <- tryCatch(
+        compute_effect_size(es_inputs),
+        error = function(e) {
+          message("[effect_size calculate] error: ", e$message)
+          list(r = NULL, z = NULL, var_z = NULL,
+               effect_status = "insufficient_data",
+               effect_warnings = c(paste("Computation error:", e$message)))
+        }
+      )
+
+      es_result(computed)
+      showNotification("Effect size calculated (not yet saved).",
+                       type = "message", duration = 3)
+    }, ignoreInit = TRUE)
 
     # ---- On save trigger: compute effect size and upsert ----
     observeEvent(on_save_trigger(), {
