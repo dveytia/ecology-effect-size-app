@@ -70,6 +70,8 @@ mod_review_server <- function(id, project_id, session_rv) {
     loaded_at          <- reactiveVal(NULL)   # POSIXct: when article was opened
     # group_instances: named list  group_name -> list of instance keys (strings)
     group_instances    <- reactiveVal(list())
+    # Effect size save trigger (incremented on Save to signal the ES module)
+    es_save_trigger    <- reactiveVal(0)
 
     # ---- Simple unique key generator -----------------------
     .new_key <- function() paste0(sample(c(letters[1:6], 0:9), 8, replace = TRUE),
@@ -184,6 +186,15 @@ mod_review_server <- function(id, project_id, session_rv) {
       }}
       group_instances(insts)
     }
+
+    # ---- Effect size module server call ----
+    es_module <- mod_effect_size_ui_server(
+      "effect_size_form",
+      session_rv         = session_rv,
+      article_id_reactive = current_article_id,
+      project_id_reactive = project_id,
+      on_save_trigger    = es_save_trigger
+    )
 
     # Reset when project changes
     observeEvent(project_id(), {
@@ -654,9 +665,8 @@ mod_review_server <- function(id, project_id, session_rv) {
         },
 
         "effect_size" = {
-          # Phase 9 will replace this stub with mod_effect_size_ui
-          div(class = "alert alert-info py-2 small",
-            icon("info-circle"), " Effect size entry will be available in Phase 9.")
+          # Phase 9: render the full effect size sub-form
+          mod_effect_size_ui_ui(ns("effect_size_form"))
         },
 
         # Fallback
@@ -936,6 +946,9 @@ mod_review_server <- function(id, project_id, session_rv) {
           showNotification(paste("Status update failed:", e$message),
                             type = "warning")
       )
+
+      # Trigger effect size computation and save
+      es_save_trigger(es_save_trigger() + 1L)
 
       # Audit log
       .write_audit(aid, "save", old_json = old_meta, new_json = vals)

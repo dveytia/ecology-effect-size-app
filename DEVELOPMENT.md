@@ -298,7 +298,28 @@ Review 3 articles end-to-end (all labels, label group with 3 instances, skip). V
 **Validation Gate 9:**
 Review one article for each of 5 study designs. Test Pathway A and B for interaction. Verify computed values match unit test expectations. Verify small SD toggle visibility.
 
-**Status:** [ ] Not started
+**Implementation notes:**
+- `mod_effect_size_ui_ui()` renders a full effect size sub-form with:
+  - General fields (study_method, response_scale, response/predictor distribution, variable names, units, interaction_effect checkbox)
+  - Study design selector (control_treatment, correlation, regression, interaction, time_trend)
+  - Conditional panels per design with all fields from spec §8
+  - Tooltips matching spec §8 for t-stat, F-stat, df, r, etc.
+  - Interaction Pathway A (explicit interaction term) and Pathway B (two sub-forms with full design selectors for Group A / Group B, using navset_card_tab)
+  - Small SD toggle (visible only when means present but no variability stats or test statistics)
+  - Effect size result display card showing r, z, var_z, status badge, and warnings after Save
+- `mod_effect_size_ui_server()` receives `article_id_reactive` and `on_save_trigger` from the review module:
+  - On article change: loads existing `effect_sizes` row, populates all fields, shows stored result
+  - On save trigger: collects all inputs → calls `compute_effect_size()` → upserts to `effect_sizes` table
+  - Returns `list(collect_inputs, result)` for parent module access
+- Wired into `mod_review.R`:
+  - `es_save_trigger` reactiveVal added to State section
+  - `mod_effect_size_ui_server()` called once in server, before project change observer
+  - `"effect_size"` variable_type in `.render_field()` now renders `mod_effect_size_ui_ui(ns("effect_size_form"))` instead of the Phase 7 stub
+  - `.do_save()` increments `es_save_trigger` after metadata upsert, before audit log write
+- Pathway B sub-forms use `"grpA_"` and `"grpB_"` prefixes for all field IDs to avoid namespace collisions
+- No new SQL required (effect_sizes table created in Phase 1)
+
+**Status:** [ ] Not started  [x] In progress  [ ] Gate passed
 
 ---
 
@@ -310,9 +331,10 @@ Review one article for each of 5 study designs. Test Pathway A and B for interac
 - `modules/mod_export.R`
 - `R/export.R` — full implementation
 - `tests/test_export.R`
+- `tests/test_map.R` — plots a map of the coded locations in the entire corpus, by binning all the openstreetmap_locations to a standard 1 degree x 1 degree grid. For example, if 'Paris' is coded twice and covers 3 grid cells, each cell will have a value of (n instances of location)/(n cells covered by location) = 2/3. This is done for all locations and then summed per cell. 
 
 **Validation Gate 10:**
-Export 10+ articles (some with label groups). Open in Excel: no `[object Object]`, all columns present. Run meta-ready export in `metafor::rma(yi=yi, vi=vi, data=df)` without error.
+Export 10+ articles (some with label groups). Open in Excel: no `[object Object]`, all columns present. Run meta-ready export in `metafor::rma(yi=yi, vi=vi, data=df)` without error. Plot a test map using `tests/test_map.R`.
 
 **Status:** [ ] Not started
 
@@ -344,6 +366,7 @@ Reviewer JWT cannot access another project's articles directly (API returns 403)
 | 2026-02-22 | Phase 6 Google Drive integration implemented | `R/gdrive.R` fully implemented; `sql/07_gdrive_columns.sql` adds `article_num` to articles and ensures Drive columns exist on projects. Edit Project modal gains Drive URL + Sync Now. `global.R` calls `gdrive_init()` at startup. |
 | 2026-02-22 | Phase 7 Review Interface implemented | `modules/mod_review.R` fully implemented; wired into `mod_project_home.R` replacing the Phase 7 stub. Dynamic label form (all 10 variable types), label groups with multi-instance add/remove, Save/Next/Skip actions, concurrency conflict detection, audit log writes. Effect size fields stubbed for Phase 9. |
 | 2026-02-22 | Phase 8 Effect Size Engine implemented | `R/effectsize.R` fully implemented with all design pathways (control/treatment Hedges g, correlation, regression, interaction Pathway A & B, time_trend). `tests/test_effectsize.R` has 37 passing assertions (0 failures). `%||%` null-coalesce allows vector warnings to propagate correctly. |
+| 2026-02-22 | Phase 9 Effect Size UI implemented | `modules/mod_effect_size_ui.R` fully implemented with general fields, all 5 study designs, conditional panels, Interaction Pathway A/B (Pathway B with full sub-forms per group), small SD toggle, result display. Wired into `mod_review.R`: effect_size variable_type renders the real module; save triggers computation and upsert to `effect_sizes` table. |
 
 ---
 
