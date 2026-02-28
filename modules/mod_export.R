@@ -13,7 +13,7 @@ mod_export_ui <- function(id) {
     # ---- Header ----
     div(class = "d-flex justify-content-between align-items-center mb-3",
       h5(class = "mb-0", icon("file-export"), " Export Data"),
-      span(class = "text-muted small", "Owner only: download project data as CSV")
+      span(class = "text-muted small", "Owner only: download project data as Excel")
     ),
 
     # ---- Access control message (shown to non-owners) ----
@@ -37,10 +37,17 @@ mod_export_ui <- function(id) {
                 selected = c("reviewed"),
                 inline   = FALSE)
             ),
-            # Date range
+            # Date range (opt-in)
             column(3,
-              dateInput(ns("date_from"), "Reviewed From", value = NA),
-              dateInput(ns("date_to"),   "Reviewed To",   value = NA)
+              checkboxInput(ns("use_date_filter"), "Filter by review date",
+                            value = FALSE),
+              conditionalPanel(
+                condition = sprintf("input['%s'] === true", ns("use_date_filter")),
+                dateInput(ns("date_from"), "From",
+                          value = Sys.Date() - 365),
+                dateInput(ns("date_to"),   "To",
+                          value = Sys.Date())
+              )
             ),
             # Effect status
             column(3,
@@ -138,11 +145,13 @@ mod_export_server <- function(id, project_id, session_rv) {
 
     # ---- Collect current filters ----
     .current_filters <- function() {
+      # Only pass date filters when the opt-in checkbox is ticked
+      use_dates <- isTRUE(input$use_date_filter)
       list(
         reviewer      = input$reviewer,
         review_status = input$review_status,
-        date_from     = input$date_from,
-        date_to       = input$date_to,
+        date_from     = if (use_dates) input$date_from else NULL,
+        date_to       = if (use_dates) input$date_to   else NULL,
         effect_status = input$effect_status
       )
     }
@@ -194,10 +203,10 @@ mod_export_server <- function(id, project_id, session_rv) {
       preview
     }, striped = TRUE, hover = TRUE, bordered = TRUE, spacing = "s", na = "")
 
-    # ---- Full CSV download ----
+    # ---- Full Excel download ----
     output$dl_full <- downloadHandler(
       filename = function() {
-        paste0("full_export_", format(Sys.Date(), "%Y%m%d"), ".csv")
+        paste0("full_export_", format(Sys.Date(), "%Y%m%d"), ".xlsx")
       },
       content = function(file) {
         pid <- project_id()
@@ -209,15 +218,15 @@ mod_export_server <- function(id, project_id, session_rv) {
             data.frame()
           }
         )
-        data.table::fwrite(df, file, bom = TRUE)
+        writexl::write_xlsx(df, file)
       },
-      contentType = "text/csv"
+      contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    # ---- Meta-ready CSV download ----
+    # ---- Meta-ready Excel download ----
     output$dl_meta <- downloadHandler(
       filename = function() {
-        paste0("meta_export_", format(Sys.Date(), "%Y%m%d"), ".csv")
+        paste0("meta_export_", format(Sys.Date(), "%Y%m%d"), ".xlsx")
       },
       content = function(file) {
         pid <- project_id()
@@ -233,9 +242,9 @@ mod_export_server <- function(id, project_id, session_rv) {
           showNotification("No rows with computed effect sizes match the current filters.",
                            type = "warning")
         }
-        data.table::fwrite(df, file, bom = TRUE)
+        writexl::write_xlsx(df, file)
       },
-      contentType = "text/csv"
+      contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
   })
