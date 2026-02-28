@@ -608,8 +608,10 @@ mod_review_server <- function(id, project_id, session_rv) {
                   osm_id = as.character(loc$osm_id %||% "")
                 )
                 if (!is.null(loc$geojson)) obj$geojson <- loc$geojson
+                geom_type <- if (!is.null(loc$geojson) && !is.null(loc$geojson$type))
+                  loc$geojson$type else "none"
                 enc <- as.character(jsonlite::toJSON(obj, auto_unbox = TRUE))
-                osm_opts <- c(osm_opts, list(list(value = enc, label = loc$name)))
+                osm_opts <- c(osm_opts, list(list(value = enc, label = loc$name, geom_type = geom_type)))
                 osm_sel  <- c(osm_sel, enc)
               }
             }
@@ -643,9 +645,11 @@ mod_review_server <- function(id, project_id, session_rv) {
                             osm_id: String(d.osm_id)
                         };
                         if (d.geojson) { obj.geojson = d.geojson; }
+                        var geom_type = (d.geojson && d.geojson.type) ? d.geojson.type : 'none';
                         return {
                           value: JSON.stringify(obj),
-                          label: d.display_name
+                          label: d.display_name,
+                          geom_type: geom_type
                         };
                       }));
                     })
@@ -653,10 +657,27 @@ mod_review_server <- function(id, project_id, session_rv) {
                 }"),
                 render = I("{
                   option: function(item, escape) {
-                    return '<div>' + escape(item.label) + '</div>';
+                    var gt = item.geom_type || 'none';
+                    var color = '#dc3545';
+                    var title = 'No geometry data';
+                    if (gt === 'Polygon' || gt === 'MultiPolygon') {
+                      color = '#198754'; title = 'Polygon / MultiPolygon';
+                    } else if (gt !== 'none') {
+                      color = '#ffc107'; title = 'Point location';
+                    }
+                    return '<div style=\"border-left:4px solid ' + color +
+                           '; padding-left:6px; padding-top:2px; padding-bottom:2px;\" title=\"' +
+                           title + '\">' + escape(item.label) + '</div>';
                   },
                   item: function(item, escape) {
                     var lbl = item.label;
+                    var gt = item.geom_type || 'none';
+                    var color = '#dc3545';
+                    if (gt === 'Polygon' || gt === 'MultiPolygon') {
+                      color = '#198754';
+                    } else if (gt !== 'none') {
+                      color = '#ffc107';
+                    }
                     try {
                       var d = JSON.parse(item.value);
                       lbl = d.name || item.label;
@@ -664,13 +685,24 @@ mod_review_server <- function(id, project_id, session_rv) {
                         lbl += ' (' + Number(d.lat).toFixed(2) + ', ' + Number(d.lon).toFixed(2) + ')';
                       }
                     } catch(e) {}
-                    return '<div>' + escape(lbl) + '</div>';
+                    return '<div style=\"border-left:4px solid ' + color +
+                           '; padding-left:4px;\">' + escape(lbl) + '</div>';
                   }
                 }")
               )
             ),
-            tags$small(class = "text-muted",
-                       "Type at least 3 characters to search OpenStreetMap")
+            tags$div(class = "d-flex flex-wrap gap-3 mt-1",
+              tags$small(class = "text-muted",
+                "Type at least 3 characters to search OpenStreetMap"),
+              tags$small(
+                tags$span(style = "display:inline-block;width:10px;height:10px;background:#198754;border-radius:2px;margin-right:3px;"),
+                "Polygon / MultiPolygon",
+                tags$span(style = "display:inline-block;width:10px;height:10px;background:#ffc107;border-radius:2px;margin-left:8px;margin-right:3px;"),
+                "Point",
+                tags$span(style = "display:inline-block;width:10px;height:10px;background:#dc3545;border-radius:2px;margin-left:8px;margin-right:3px;"),
+                "No geometry"
+              )
+            )
           )
         },
 

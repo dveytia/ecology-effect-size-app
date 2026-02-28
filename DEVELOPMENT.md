@@ -245,7 +245,7 @@ Review 3 articles end-to-end (all labels, label group with 3 instances, skip). V
   - `text` → `textInput`; `integer` / `numeric` → `numericInput`; `boolean` → `checkboxInput`
   - `select one` → `selectInput`; `select multiple` → `checkboxGroupInput`
   - `YYYY-MM-DD` → `dateInput`; `bounding_box` → 4×`numericInput` (lon_min/max, lat_min/max)
-  - `openstreetmap_location` → `textInput` (Phase 11 can add autocomplete)
+  - `openstreetmap_location` → `selectizeInput` with live Nominatim search (≥3 chars). Dropdown entries are colour-coded by geometry type: **green** = Polygon/MultiPolygon, **yellow** = Point (or other geometry), **red** = no geometry data returned. A colour legend is shown below the field. Selected items retain their colour stripe. The `geom_type` field is stored on each selectize item (not persisted to DB) so colours survive re-render from saved data.
   - `effect_size` → stub alert panel (Phase 9 will replace with `mod_effect_size_ui`)
 - Label groups: rendered as collapsible instance cards. Each instance gets a unique key (`inst_key`) so multiple instances of the same group have distinct Shiny input IDs: `lbl_{name}__{key}`.
 - `group_instances` reactiveVal stores `list(group_name = list(key1, key2, ...))`. Adding an instance appends a new key; removing slides it out. The form re-renders via `output$label_form` which reads `group_instances()`.
