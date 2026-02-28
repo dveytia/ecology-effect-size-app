@@ -17,12 +17,29 @@
 
 #' Safely parse json_data from a single article's metadata row
 #'
-#' @param jd  Character JSON string or already-parsed list
+#' Handles both character JSON strings and already-parsed lists.
+#' Also handles the case where a list-column [i] access returns a
+#' length-1 wrapper list rather than the actual value.
+#'
+#' @param jd  Character JSON string, already-parsed list, or a length-1
+#'            list-wrapper (from single-bracket extraction on a list column)
 #' @return    Named list (empty list on failure)
 .parse_json_data <- function(jd) {
-  if (is.null(jd) || (length(jd) == 1 && is.na(jd))) return(list())
+  if (is.null(jd)) return(list())
+  # Unwrap a single-element list-wrapper (from df$col[i] on list columns)
+  if (is.list(jd) && length(jd) == 1 && !is.null(names(jd)) &&
+      all(names(jd) == "")) {
+    jd <- jd[[1]]
+  } else if (is.list(jd) && length(jd) == 1 && is.null(names(jd))) {
+    jd <- jd[[1]]
+  }
+  if (is.null(jd)) return(list())
+  # NA scalar
+  if (length(jd) == 1 && !is.list(jd) && is.na(jd)) return(list())
+  # Already a named list — use directly
   if (is.list(jd)) return(jd)
-  if (is.character(jd) && nchar(jd) > 0) {
+  # Character JSON string
+  if (is.character(jd) && nchar(trimws(jd)) > 0) {
     tryCatch(
       jsonlite::fromJSON(jd, simplifyVector = FALSE),
       error = function(e) list()
@@ -54,11 +71,18 @@
 
 #' Flatten raw_effect_json fields with "raw_" prefix
 #'
-#' @param raw_json  Character JSON string or already-parsed list
+#' @param raw_json  Character JSON string, already-parsed list, or
+#'                  list-column wrapper
 #' @return          Named list with "raw_" prefixed keys
 .flatten_raw_effect <- function(raw_json) {
-  if (is.null(raw_json) || (length(raw_json) == 1 && is.na(raw_json))) return(list())
-  parsed <- if (is.character(raw_json)) {
+  if (is.null(raw_json)) return(list())
+  # Unwrap single-element list-wrapper from list-column access
+  if (is.list(raw_json) && length(raw_json) == 1 && is.null(names(raw_json))) {
+    raw_json <- raw_json[[1]]
+  }
+  if (is.null(raw_json)) return(list())
+  if (!is.list(raw_json) && length(raw_json) == 1 && is.na(raw_json)) return(list())
+  parsed <- if (is.character(raw_json) && length(raw_json) == 1) {
     tryCatch(jsonlite::fromJSON(raw_json, simplifyVector = FALSE), error = function(e) list())
   } else if (is.list(raw_json)) {
     raw_json
@@ -162,13 +186,28 @@ unnest_labels <- function(metadata_df, label_schema) {
                       stringsAsFactors = FALSE))
   }
 
+  # Normalise columns that may arrive as list-columns (JSONB NULL → list element)
+  # Coerce to plain character vectors so == and is.na() behave predictably.
+  safe_char <- function(x) {
+    if (is.list(x)) {
+      vapply(x, function(v) if (is.null(v) || (length(v) == 1 && is.na(v))) NA_character_ else as.character(v[[1]]), character(1))
+    } else {
+      as.character(x)
+    }
+  }
+  label_schema$label_type      <- safe_char(label_schema$label_type)
+  label_schema$parent_label_id <- safe_char(label_schema$parent_label_id)
+  label_schema$variable_type   <- safe_char(label_schema$variable_type)
+  label_schema$name            <- safe_char(label_schema$name)
+
+  # Helper: TRUE if parent_label_id is absent (NA or empty string)
+  no_parent <- is.na(label_schema$parent_label_id) |
+               label_schema$parent_label_id == "" |
+               label_schema$parent_label_id == "NA"
+
   # Separate top-level (single) labels and group labels
-  top_labels  <- label_schema[label_schema$label_type == "single" &
-                               (is.na(label_schema$parent_label_id) |
-                                label_schema$parent_label_id == ""), ]
-  group_parents <- label_schema[label_schema$label_type == "group" &
-                                 (is.na(label_schema$parent_label_id) |
-                                  label_schema$parent_label_id == ""), ]
+  top_labels  <- label_schema[label_schema$label_type %in% "single" & no_parent, ]
+  group_parents <- label_schema[label_schema$label_type %in% "group"  & no_parent, ]
 
   # Build result row by row
   all_rows <- list()
@@ -176,16 +215,20 @@ unnest_labels <- function(metadata_df, label_schema) {
 
   for (i in seq_len(nrow(metadata_df))) {
     aid <- metadata_df$article_id[i]
-    jd  <- .parse_json_data(metadata_df$json_data[i])
+    # Use [[i]] to extract the actual value from a list-column (JSONB)
+    raw_jd <- tryCatch(metadata_df$json_data[[i]], error = function(e) NULL)
+    jd  <- .parse_json_data(raw_jd)
 
     # Extract top-level (single) label values
     base_row <- list(article_id = aid)
     for (j in seq_len(nrow(top_labels))) {
       lbl_name <- top_labels$name[j]
       var_type <- top_labels$variable_type[j]
+      # Skip rows where name is NA (should not happen after safe_char, but be safe)
+      if (is.na(lbl_name)) next
       val      <- jd[[lbl_name]]
       # Skip effect_size type labels — they are in the effect_sizes table
-      if (!is.na(var_type) && var_type == "effect_size") next
+      if (!is.na(var_type) && var_type %in% "effect_size") next
       base_row[[lbl_name]] <- .flatten_value(val)
     }
 
@@ -196,8 +239,9 @@ unnest_labels <- function(metadata_df, label_schema) {
       for (g in seq_len(nrow(group_parents))) {
         grp_name <- group_parents$name[g]
         grp_id   <- group_parents$label_id[g]
+        if (is.na(grp_name) || is.na(grp_id)) next
         child_labels <- label_schema[!is.na(label_schema$parent_label_id) &
-                                      label_schema$parent_label_id == grp_id, ]
+                                      label_schema$parent_label_id %in% grp_id, ]
         instances <- jd[[grp_name]]
 
         if (is.list(instances) && length(instances) > 0) {
@@ -210,7 +254,8 @@ unnest_labels <- function(metadata_df, label_schema) {
             for (cl in seq_len(nrow(child_labels))) {
               cl_name  <- child_labels$name[cl]
               cl_type  <- child_labels$variable_type[cl]
-              if (!is.na(cl_type) && cl_type == "effect_size") next
+              if (is.na(cl_name)) next
+              if (!is.na(cl_type) && cl_type %in% "effect_size") next
               inst_row[[cl_name]] <- .flatten_value(inst[[cl_name]])
             }
 
@@ -370,7 +415,9 @@ build_full_export <- function(project_id, filters = list(), token = NULL) {
   # 6. Flatten raw_effect_json into prefixed columns
   if (is.data.frame(effects) && nrow(effects) > 0) {
     raw_cols_list <- lapply(seq_len(nrow(effects)), function(i) {
-      .flatten_raw_effect(effects$raw_effect_json[i])
+      # Use [[i]] to extract from a list-column (JSONB stored as object)
+      raw_val <- tryCatch(effects$raw_effect_json[[i]], error = function(e) NULL)
+      .flatten_raw_effect(raw_val)
     })
     # Collect all raw_ column names
     all_raw_names <- unique(unlist(lapply(raw_cols_list, names)))
@@ -425,6 +472,14 @@ build_full_export <- function(project_id, filters = list(), token = NULL) {
   if ("article_num" %in% names(merged) &&
       any(!is.na(merged$article_num))) {
     merged <- merged[order(merged$article_num), , drop = FALSE]
+  }
+
+  # Trim location_osm: strip "; Polygon; ..." geometry suffix so only
+  # "Display Name; lat; lon; osm_id" is included in the export.
+  if ("location_osm" %in% names(merged)) {
+    merged$location_osm <- sub(";\\s*[Pp]olygon;.*$", "", merged$location_osm,
+                                perl = TRUE)
+    merged$location_osm <- trimws(merged$location_osm)
   }
 
   # Reset row names
