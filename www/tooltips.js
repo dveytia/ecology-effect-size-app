@@ -36,9 +36,11 @@ document.addEventListener('DOMContentLoaded', function () {
   initTooltips();
 });
 
-// Re-run after Shiny re-renders dynamic UI
+// Re-run after Shiny re-renders dynamic UI (debounced to prevent excessive calls)
+var _tooltipTimer = null;
 $(document).on('shiny:value', function () {
-  setTimeout(initTooltips, 200);
+  if (_tooltipTimer) clearTimeout(_tooltipTimer);
+  _tooltipTimer = setTimeout(initTooltips, 500);
 });
 
 // Allow server to trigger re-initialisation explicitly

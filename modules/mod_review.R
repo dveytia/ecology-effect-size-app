@@ -70,6 +70,8 @@ mod_review_server <- function(id, project_id, session_rv) {
     loaded_at          <- reactiveVal(NULL)   # POSIXct: when article was opened
     # group_instances: named list  group_name -> list of instance keys (strings)
     group_instances    <- reactiveVal(list())
+    # Cached metadata for current article (avoids DB call inside renderUI)
+    current_meta       <- reactiveVal(list())
     # Effect size save trigger (incremented on Save to signal the ES module)
     es_save_trigger    <- reactiveVal(0)   # kept for API compat, no longer used
     # Monotonic counter per group for generating unique instance keys.
@@ -162,6 +164,7 @@ mod_review_server <- function(id, project_id, session_rv) {
     # Article selection
     # --------------------------------------------------------
     .select_article <- function(aid) {
+      message(sprintf("[review] .select_article(%s) start", aid))
       current_article_id(aid)
       loaded_at(Sys.time())
 
@@ -176,6 +179,7 @@ mod_review_server <- function(id, project_id, session_rv) {
       # Build group_instances from existing metadata
       # Keys are DETERMINISTIC: paste0(gname, "_", j) matching group_instance_id
       meta  <- .load_meta(aid)
+      current_meta(meta)   # cache for renderUI (avoids blocking DB call in render)
       lbls  <- project_labels()
       insts <- list()
 
@@ -199,16 +203,35 @@ mod_review_server <- function(id, project_id, session_rv) {
         }
       }}
       group_instances(insts)
+      message(sprintf("[review] .select_article(%s) done — %d groups",
+                      aid, length(insts)))
     }
+
+    # ---- Pre-fetch all effect sizes for current article ----
+    # Single DB call shared across all ES modules to avoid N+1 queries.
+    prefetched_effects <- reactive({
+      aid <- current_article_id()
+      if (is.null(aid)) return(data.frame())
+      tryCatch(
+        sb_get("effect_sizes",
+               filters = list(article_id = aid),
+               token   = session_rv$token),
+        error = function(e) {
+          message("[prefetched_effects] error: ", e$message)
+          data.frame()
+        }
+      )
+    })
 
     # ---- Effect size module server call ----
     # For top-level effect_size labels (not inside a group), a single module:
     es_module <- mod_effect_size_ui_server(
       "effect_size_form",
-      session_rv         = session_rv,
-      article_id_reactive = current_article_id,
-      project_id_reactive = project_id,
-      group_instance_id  = NULL
+      session_rv           = session_rv,
+      article_id_reactive  = current_article_id,
+      project_id_reactive  = project_id,
+      group_instance_id    = NULL,
+      prefetched_effects   = prefetched_effects
     )
 
     # For grouped effect_size labels, modules are started dynamically.
@@ -254,7 +277,8 @@ mod_review_server <- function(id, project_id, session_rv) {
               session_rv          = session_rv,
               article_id_reactive = current_article_id,
               project_id_reactive = project_id,
-              group_instance_id   = key   # key IS the gi_id
+              group_instance_id   = key,   # key IS the gi_id
+              prefetched_effects  = prefetched_effects
             )
             es_started_keys  <<- c(es_started_keys, mod_id)
             es_module_entries[[mod_id]] <<- list(
@@ -514,14 +538,19 @@ mod_review_server <- function(id, project_id, session_rv) {
         return(p(class = "text-muted fst-italic",
                  "No labels defined. Add labels in the Labels tab."))
 
-      meta     <- .load_meta(aid)
+      # Use cached metadata (loaded by .select_article) — never make a
+      # blocking DB call inside renderUI.
+      meta     <- current_meta()
       # Safely identify top-level labels (no parent)
       pid_col  <- vapply(seq_len(nrow(lbls)), function(r)
         as.character(lbls$parent_label_id[r] %||% "")[1], "")
       pid_col[is.na(pid_col)] <- ""
       top_lbls <- lbls[pid_col == "", , drop = FALSE]
 
-      # Ensure newly-added groups have at least one instance key
+      # Ensure newly-added groups have at least one instance key.
+      # If any group is missing, update the local `insts` and write back
+      # to the reactiveVal, but CONTINUE rendering (no return(NULL)).
+      # This prevents a blank-frame flash that causes visual oscillation.
       insts    <- group_instances()
       changed  <- FALSE
       for (gi in seq_len(nrow(top_lbls))) {
@@ -545,9 +574,12 @@ mod_review_server <- function(id, project_id, session_rv) {
         }
       }
       if (changed) {
+        # Write back the updated instances so ES module observers and
+        # future add/remove actions see the correct state.  The reactive
+        # change will schedule a second render, but since all groups will
+        # already have instances, `changed` will be FALSE and the output
+        # HTML will be identical — no visible flicker.
         group_instances(insts)
-        # Return early — the reactive update will re-trigger this renderUI
-        return(NULL)
       }
 
       tagList(lapply(seq_len(nrow(top_lbls)), function(i) {
@@ -1059,6 +1091,9 @@ mod_review_server <- function(id, project_id, session_rv) {
              json_data  = jsonlite::toJSON(vals, auto_unbox = TRUE)),
         on_conflict = "article_id",
         token       = session_rv$token)
+
+      # Update cached metadata so label_form doesn't use stale data
+      current_meta(vals)
 
       # Update article review status
       tryCatch(
