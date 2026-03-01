@@ -40,6 +40,7 @@
       "Content-Type"  = "application/json",
       "Prefer"        = "return=representation"
     ) |>
+    httr2::req_timeout(seconds = 15) |>
     httr2::req_error(is_error = function(resp) FALSE)
 }
 

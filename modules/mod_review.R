@@ -162,6 +162,7 @@ mod_review_server <- function(id, project_id, session_rv) {
     # Article selection
     # --------------------------------------------------------
     .select_article <- function(aid) {
+      message(sprintf("[review] .select_article(%s) start", aid))
       current_article_id(aid)
       loaded_at(Sys.time())
 
@@ -199,16 +200,35 @@ mod_review_server <- function(id, project_id, session_rv) {
         }
       }}
       group_instances(insts)
+      message(sprintf("[review] .select_article(%s) done — %d groups",
+                      aid, length(insts)))
     }
+
+    # ---- Pre-fetch all effect sizes for current article ----
+    # Single DB call shared across all ES modules to avoid N+1 queries.
+    prefetched_effects <- reactive({
+      aid <- current_article_id()
+      if (is.null(aid)) return(data.frame())
+      tryCatch(
+        sb_get("effect_sizes",
+               filters = list(article_id = aid),
+               token   = session_rv$token),
+        error = function(e) {
+          message("[prefetched_effects] error: ", e$message)
+          data.frame()
+        }
+      )
+    })
 
     # ---- Effect size module server call ----
     # For top-level effect_size labels (not inside a group), a single module:
     es_module <- mod_effect_size_ui_server(
       "effect_size_form",
-      session_rv         = session_rv,
-      article_id_reactive = current_article_id,
-      project_id_reactive = project_id,
-      group_instance_id  = NULL
+      session_rv           = session_rv,
+      article_id_reactive  = current_article_id,
+      project_id_reactive  = project_id,
+      group_instance_id    = NULL,
+      prefetched_effects   = prefetched_effects
     )
 
     # For grouped effect_size labels, modules are started dynamically.
@@ -254,7 +274,8 @@ mod_review_server <- function(id, project_id, session_rv) {
               session_rv          = session_rv,
               article_id_reactive = current_article_id,
               project_id_reactive = project_id,
-              group_instance_id   = key   # key IS the gi_id
+              group_instance_id   = key,   # key IS the gi_id
+              prefetched_effects  = prefetched_effects
             )
             es_started_keys  <<- c(es_started_keys, mod_id)
             es_module_entries[[mod_id]] <<- list(
