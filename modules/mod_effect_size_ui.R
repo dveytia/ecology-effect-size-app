@@ -82,6 +82,11 @@
 mod_effect_size_ui_ui <- function(id) {
   ns <- NS(id)
   div(class = "effect-size-block p-3",
+    # Hidden token: changes each render so the server can detect UI re-creation
+    div(style = "display:none;",
+      textInput(ns("ui_render_token"), label = NULL,
+                value = as.character(runif(1)))
+    ),
     h5(icon("calculator"), " Effect Size"),
 
     # ---- General fields (all designs) ----
@@ -476,11 +481,14 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
 
     # ---- Stored result (from last save/load) ----
     es_result <- reactiveVal(NULL)
+    # ---- Stored raw JSON (for repopulating after UI re-render) ----
+    stored_raw <- reactiveVal(NULL)
 
     # ---- Load existing effect size data when article changes ----
     observeEvent(article_id_reactive(), {
       aid <- article_id_reactive()
       es_result(NULL)   # clear previous result
+      stored_raw(NULL)  # clear previous raw data
       if (is.null(aid)) return()
 
       # ALWAYS reset all fields first to prevent stale data from the
@@ -559,6 +567,9 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
             message("[mod_effect_size_ui] raw_effect_json parse error: ", e$message)
             list()
           })
+
+          # Store raw data for repopulation after UI re-renders
+          stored_raw(raw)
 
           # Show stored result immediately (doesn't need UI inputs)
           etype <- tryCatch(row$effect_type, error = function(e) NULL)
@@ -1318,6 +1329,53 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
     # (called synchronously before .go_next()) to avoid a race condition
     # where the async observer would fire after the article_id had already
     # changed to the next article.
+
+    # ---- Self-repopulate when UI is re-rendered ----
+    # When the parent renderUI re-renders (e.g. Add Instance), all DOM
+    # inputs are destroyed and recreated.  The hidden ui_render_token
+    # gets a new random value each time the UI is (re-)created.  We watch
+    # it here: ignoreInit = TRUE skips the first render (handled by the
+    # article-load observer), so this fires only on RE-renders.
+    observeEvent(input$ui_render_token, {
+      raw <- stored_raw()
+      if (is.null(raw) || length(raw) == 0) return()
+      # Also restore the computed result badge
+      # Same phased restore as the initial load, but without DB roundtrip
+      shinyjs::delay(600, {
+        .update_input_safe("study_method",             raw$study_method)
+        .update_input_safe("response_scale",           raw$response_scale)
+        .update_input_safe("response_distribution",    raw$response_distribution)
+        .update_input_safe("response_variable_name",   raw$response_variable_name)
+        .update_input_safe("response_unit",            raw$response_unit)
+        .update_input_safe("predictor_distribution",   raw$predictor_distribution)
+        .update_input_safe("predictor_variable_name",  raw$predictor_variable_name)
+        .update_input_safe("predictor_unit",           raw$predictor_unit)
+        .update_input_safe("interaction_effect",       raw$interaction_effect)
+        .update_input_safe("study_design",             raw$study_design)
+        shinyjs::delay(900, {
+          design <- raw$study_design %||% ""
+          .restore_design_fields(raw, "")
+          if (design == "interaction") {
+            .update_input_safe("interaction_pathway",  raw$interaction_pathway)
+            shinyjs::delay(700, {
+              pathway <- raw$interaction_pathway %||% "A"
+              if (pathway == "A") {
+                .restore_interaction_a(raw, "")
+              } else {
+                .update_input_safe("grpA_study_design", raw$group_a$study_design)
+                .update_input_safe("grpB_study_design", raw$group_b$study_design)
+                shinyjs::delay(700, {
+                  if (!is.null(raw$group_a))
+                    .restore_design_fields(raw$group_a, "grpA_")
+                  if (!is.null(raw$group_b))
+                    .restore_design_fields(raw$group_b, "grpB_")
+                })
+              }
+            })
+          }
+        })
+      })
+    }, ignoreInit = TRUE)
 
     # ---- Return reactive: collected inputs (for the parent module) ----
     return(list(

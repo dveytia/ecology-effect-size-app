@@ -8,7 +8,7 @@
     "doi_clean": "10.1098/rspb.2017.2389",
     "review_status": "reviewed",
     "reviewed_by": "564c9186-f70d-47f2-b285-55baee74f705",
-    "reviewed_at": "2026-02-28T12:14:50+00:00",
+    "reviewed_at": "2026-03-01T11:52:42+00:00",
     "labels": {
       "location_osm": [
         {
@@ -29,7 +29,99 @@
       "is_experimental": false,
       "study_site": [
         {
-          "site_name": "Paris"
+          "site_name": "Paris",
+          "effect_size_data": {
+            "effect_id": "29c4acf0-94b3-4952-b829-10937bcf18e8",
+            "article_id": "6b26fc7f-966b-4fe8-8065-d5d00cdecdd8",
+            "raw_effect_json": {
+              "n": 20,
+              "df": null,
+              "sd_X": null,
+              "sd_Y": null,
+              "se_r": 0.02,
+              "t_stat": null,
+              "r_reported": 0.8,
+              "study_design": "correlation",
+              "study_method": "Observational",
+              "covariance_XY": null,
+              "response_unit": "",
+              "predictor_unit": "",
+              "response_scale": "Ind. health or growth",
+              "interaction_effect": false,
+              "response_distribution": "Continuous",
+              "predictor_distribution": "Continuous",
+              "response_variable_name": "",
+              "predictor_variable_name": ""
+            },
+            "r": 0.8,
+            "z": 1.0986,
+            "var_z": 0.0588,
+            "effect_status": "calculated",
+            "effect_warnings": [],
+            "computed_at": "2026-03-01T11:52:42+00:00"
+          }
+        },
+        {
+          "site_name": "Interaction pathway B",
+          "effect_size_data": {
+            "effect_id": "c72701cb-7fe6-4331-a857-2acf31ca2772",
+            "article_id": "6b26fc7f-966b-4fe8-8065-d5d00cdecdd8",
+            "raw_effect_json": {
+              "group_a": {
+                "df": null,
+                "F_stat": null,
+                "t_stat": null,
+                "p_value": null,
+                "n_control": 30,
+                "n_treatment": 30,
+                "mean_control": 0.5,
+                "study_design": "control_treatment",
+                "mean_treatment": 0.5,
+                "chi_square_stat": null,
+                "var_value_control": 1,
+                "var_statistic_type": "SD",
+                "control_description": "",
+                "use_small_sd_approx": false,
+                "var_value_treatment": 1,
+                "treatment_description": ""
+              },
+              "group_b": {
+                "df": 10,
+                "F_stat": null,
+                "t_stat": 0.9,
+                "p_value": null,
+                "n_control": null,
+                "n_treatment": null,
+                "mean_control": null,
+                "study_design": "control_treatment",
+                "mean_treatment": null,
+                "chi_square_stat": null,
+                "var_value_control": null,
+                "var_statistic_type": "",
+                "control_description": "",
+                "use_small_sd_approx": false,
+                "var_value_treatment": null,
+                "treatment_description": ""
+              },
+              "study_design": "interaction",
+              "study_method": "Observational",
+              "response_unit": "",
+              "predictor_unit": "",
+              "response_scale": "Ind. health or growth",
+              "interaction_effect": true,
+              "interaction_pathway": "B",
+              "response_distribution": "Continuous",
+              "predictor_distribution": "Categorical",
+              "response_variable_name": "",
+              "predictor_variable_name": ""
+            },
+            "r": -0.2737,
+            "z": -0.2809,
+            "var_z": null,
+            "effect_status": "calculated_relative",
+            "effect_warnings": [],
+            "computed_at": "2026-03-01T11:52:42+00:00"
+          }
         }
       ],
       "simple_group": [
@@ -51,7 +143,7 @@
     "doi_clean": "10.1890/15-1432.1",
     "review_status": "reviewed",
     "reviewed_by": "564c9186-f70d-47f2-b285-55baee74f705",
-    "reviewed_at": "2026-02-28T12:19:44+00:00",
+    "reviewed_at": "2026-03-01T11:21:49+00:00",
     "labels": {
       "location_osm": [
         {
@@ -4891,7 +4983,66 @@
       "is_experimental": false,
       "study_site": [
         {
-          "site_name": "Interaction path B"
+          "site_name": "Interaction path B",
+          "effect_size_data": {
+            "effect_id": "60011ce2-35d1-40ce-b0ee-e2f611f46281",
+            "article_id": "4f8fa6f3-7345-494c-a01e-fdd0d6a6e0f0",
+            "raw_effect_json": {
+              "group_a": {
+                "df": null,
+                "F_stat": null,
+                "t_stat": null,
+                "p_value": null,
+                "n_control": 20,
+                "n_treatment": 20,
+                "mean_control": 0.5,
+                "study_design": "control_treatment",
+                "mean_treatment": 0.8,
+                "chi_square_stat": null,
+                "var_value_control": 0.01,
+                "var_statistic_type": "SD",
+                "control_description": "",
+                "use_small_sd_approx": false,
+                "var_value_treatment": 0.01,
+                "treatment_description": ""
+              },
+              "group_b": {
+                "df": null,
+                "F_stat": null,
+                "t_stat": null,
+                "p_value": null,
+                "n_control": 20,
+                "n_treatment": 20,
+                "mean_control": 0.5,
+                "study_design": "control_treatment",
+                "mean_treatment": 1.5,
+                "chi_square_stat": null,
+                "var_value_control": 0.02,
+                "var_statistic_type": "SD",
+                "control_description": "",
+                "use_small_sd_approx": false,
+                "var_value_treatment": 0.02,
+                "treatment_description": ""
+              },
+              "study_design": "interaction",
+              "study_method": "Experimental (ex-situ)",
+              "response_unit": "",
+              "predictor_unit": "",
+              "response_scale": "Pop. size",
+              "interaction_effect": true,
+              "interaction_pathway": "B",
+              "response_distribution": "Proportion",
+              "predictor_distribution": "Continuous",
+              "response_variable_name": "",
+              "predictor_variable_name": ""
+            },
+            "r": -0.47,
+            "z": -0.5101,
+            "var_z": 0.0541,
+            "effect_status": "calculated_relative",
+            "effect_warnings": [],
+            "computed_at": "2026-03-01T11:21:49+00:00"
+          }
         }
       ],
       "simple_group": [
@@ -4910,7 +5061,7 @@
     "doi_clean": "10.1007/s10750-020-04321-y",
     "review_status": "reviewed",
     "reviewed_by": "564c9186-f70d-47f2-b285-55baee74f705",
-    "reviewed_at": "2026-02-28T15:25:37+00:00",
+    "reviewed_at": "2026-03-01T11:27:57+00:00",
     "labels": {
       "bounding_box_label": {
         "lon_min": -40,
@@ -4923,22 +5074,55 @@
       "is_experimental": false,
       "study_site": [
         {
-          "site_name": "test interaction path A",
+          "site_name": "Correlation test",
           "effect_size_data": {
-            "effect_id": "bfc60512-8706-42e0-bcf0-2f079b79a038",
+            "effect_id": "ab07313d-1edb-4992-b116-fd70fc4ab40f",
+            "article_id": "fe938548-ee91-4d96-a3b1-48f452e33e9e",
+            "raw_effect_json": {
+              "n": 20,
+              "df": null,
+              "sd_X": null,
+              "sd_Y": null,
+              "se_r": 0.02,
+              "t_stat": null,
+              "r_reported": 0.8,
+              "study_design": "correlation",
+              "study_method": "",
+              "covariance_XY": null,
+              "response_unit": "",
+              "predictor_unit": "",
+              "response_scale": "",
+              "interaction_effect": false,
+              "response_distribution": "",
+              "predictor_distribution": "",
+              "response_variable_name": "",
+              "predictor_variable_name": ""
+            },
+            "r": 0.8,
+            "z": 1.0986,
+            "var_z": 0.0588,
+            "effect_status": "calculated",
+            "effect_warnings": [],
+            "computed_at": "2026-03-01T11:27:57+00:00"
+          }
+        },
+        {
+          "site_name": "Interaction pathway A",
+          "effect_size_data": {
+            "effect_id": "72256061-2d89-4069-83a2-5299ec4d61b6",
             "article_id": "fe938548-ee91-4d96-a3b1-48f452e33e9e",
             "raw_effect_json": {
               "df": 30,
               "t_stat": 0.9,
               "study_design": "interaction",
-              "study_method": "Experimental (ex-situ)",
+              "study_method": "Simulation",
               "response_unit": "",
               "predictor_unit": "",
               "response_scale": "Ind. behaviour",
               "interaction_effect": true,
               "interaction_pathway": "A",
-              "response_distribution": "Count",
-              "predictor_distribution": "Categorical",
+              "response_distribution": "Continuous",
+              "predictor_distribution": "Continuous",
               "response_variable_name": "",
               "predictor_variable_name": ""
             },
@@ -4947,47 +5131,7 @@
             "var_z": null,
             "effect_status": "calculated",
             "effect_warnings": [],
-            "computed_at": "2026-02-28T15:25:37+00:00"
-          }
-        },
-        {
-          "site_name": "Test effect size 2",
-          "effect_size_data": {
-            "effect_id": "40fe7803-2e61-4a7f-94fc-a1e81ccfee19",
-            "article_id": "fe938548-ee91-4d96-a3b1-48f452e33e9e",
-            "raw_effect_json": {
-              "df": 10,
-              "F_stat": null,
-              "t_stat": 0.8,
-              "p_value": null,
-              "n_control": null,
-              "n_treatment": null,
-              "mean_control": null,
-              "study_design": "control_treatment",
-              "study_method": "Experimental (ex-situ)",
-              "response_unit": "",
-              "mean_treatment": null,
-              "predictor_unit": "",
-              "response_scale": "Ind. behaviour",
-              "chi_square_stat": null,
-              "var_value_control": null,
-              "interaction_effect": false,
-              "var_statistic_type": "",
-              "control_description": "",
-              "use_small_sd_approx": false,
-              "var_value_treatment": null,
-              "response_distribution": "Count",
-              "treatment_description": "",
-              "predictor_distribution": "Categorical",
-              "response_variable_name": "",
-              "predictor_variable_name": ""
-            },
-            "r": 0.2453,
-            "z": 0.2504,
-            "var_z": null,
-            "effect_status": "calculated",
-            "effect_warnings": [],
-            "computed_at": "2026-02-28T15:25:37+00:00"
+            "computed_at": "2026-03-01T11:27:57+00:00"
           }
         }
       ],

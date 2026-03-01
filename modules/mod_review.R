@@ -266,6 +266,8 @@ mod_review_server <- function(id, project_id, session_rv) {
           }
         }
       }
+      # Repopulation of existing modules is handled automatically by each
+      # ES module's ui_render_token observer (self-detecting UI re-render).
     }, ignoreInit = TRUE)
 
     # Reset when project changes
