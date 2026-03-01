@@ -344,7 +344,7 @@ Review one article for each of 5 study designs. Test Pathway A and B for interac
 **Validation Gate 10:**
 Export 10+ articles (some with label groups). Open in Excel: no `[object Object]`, all columns present. Run meta-ready export in `metafor::rma(yi=yi, vi=vi, data=df)` without error. Plot a test map using `tests/test_map.R`.
 
-**Status:** [ ] Not started  [x] In progress  [ ] Gate passed
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
 
