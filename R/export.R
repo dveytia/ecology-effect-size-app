@@ -94,10 +94,19 @@
   out <- list()
   for (nm in names(parsed)) {
     val <- parsed[[nm]]
-    # Skip nested group_a/group_b sub-objects — flatten them separately
-    if (nm %in% c("group_a", "group_b") && is.list(val) && !is.null(names(val))) {
+    # Recursively flatten nested named sub-objects (group_a, group_b, etc.)
+    if (is.list(val) && !is.null(names(val)) && length(val) > 0) {
       for (sub_nm in names(val)) {
-        out[[paste0("raw_", nm, "_", sub_nm)]] <- .flatten_value(val[[sub_nm]])
+        sub_val <- val[[sub_nm]]
+        # One more level: handle deeply nested sub-sub-objects
+        if (is.list(sub_val) && !is.null(names(sub_val)) && length(sub_val) > 0) {
+          for (sub_sub_nm in names(sub_val)) {
+            out[[paste0("raw_", nm, "_", sub_nm, "_", sub_sub_nm)]] <-
+              .flatten_value(sub_val[[sub_sub_nm]])
+          }
+        } else {
+          out[[paste0("raw_", nm, "_", sub_nm)]] <- .flatten_value(sub_val)
+        }
       }
     } else {
       out[[paste0("raw_", nm)]] <- .flatten_value(val)
@@ -248,8 +257,9 @@ unnest_labels <- function(metadata_df, label_schema) {
           for (inst_num in seq_along(instances)) {
             inst <- instances[[inst_num]]
             inst_row <- base_row
-            inst_row[["group_name"]]     <- grp_name
-            inst_row[["group_instance"]] <- inst_num
+            inst_row[["group_name"]]        <- grp_name
+            inst_row[["group_instance"]]    <- inst_num
+            inst_row[["group_instance_id"]] <- paste0(grp_name, "_", inst_num)
 
             for (cl in seq_len(nrow(child_labels))) {
               cl_name  <- child_labels$name[cl]
@@ -268,13 +278,15 @@ unnest_labels <- function(metadata_df, label_schema) {
 
       # If no group instances exist, still emit the base row
       if (!has_any_instances) {
-        base_row[["group_name"]]     <- NA_character_
-        base_row[["group_instance"]] <- NA_integer_
+        base_row[["group_name"]]        <- NA_character_
+        base_row[["group_instance"]]    <- NA_integer_
+        base_row[["group_instance_id"]] <- NA_character_
         row_idx <- row_idx + 1L
         all_rows[[row_idx]] <- base_row
       }
     } else {
       # No groups — just the base row
+      base_row[["group_instance_id"]] <- NA_character_
       row_idx <- row_idx + 1L
       all_rows[[row_idx]] <- base_row
     }
@@ -401,15 +413,61 @@ build_full_export <- function(project_id, filters = list(), token = NULL) {
   effects <- tryCatch(
     sb_get("effect_sizes",
       filters = list(article_id = paste0("in.", aid_str)),
-      select  = "effect_id,article_id,group_instance_id,raw_effect_json,r,z,var_z,effect_status,effect_type,effect_warnings,computed_at",
+      select  = "effect_id,article_id,group_instance_id,raw_effect_json,r,z,var_z,effect_status,effect_warnings,computed_at",
       token   = token),
-    error = function(e) data.frame()
+    error = function(e) {
+      message("[build_full_export] effect_sizes fetch error: ", e$message)
+      data.frame()
+    }
   )
+  message(sprintf("[build_full_export] effect_sizes fetched: %d rows for %d articles",
+                  if (is.data.frame(effects)) nrow(effects) else 0L,
+                  length(article_ids)))
+  if (is.data.frame(effects) && nrow(effects) > 0) {
+    message(sprintf("[build_full_export] effect_status values: %s",
+                    paste(unique(as.character(effects$effect_status)), collapse = ", ")))
+    message(sprintf("[build_full_export] z values (first 5): %s",
+                    paste(head(effects$z, 5), collapse = ", ")))
+    message(sprintf("[build_full_export] var_z values (first 5): %s",
+                    paste(head(effects$var_z, 5), collapse = ", ")))
+  }
 
   # Apply effect_status filter if specified
   if (!is.null(filters$effect_status) && length(filters$effect_status) > 0 &&
       is.data.frame(effects) && nrow(effects) > 0) {
     effects <- effects[effects$effect_status %in% filters$effect_status, , drop = FALSE]
+  }
+
+  # 5b. Deduplicate stale effect rows: keep only the most recent computed_at
+  #     per article_id + group_instance_id.  Earlier saves may have left
+  #     orphan rows in the database before the delete-and-reinsert logic was
+  #     added.
+  if (is.data.frame(effects) && nrow(effects) > 1 &&
+      "computed_at" %in% names(effects)) {
+    effects$computed_at_ts <- as.POSIXct(effects$computed_at, tz = "UTC")
+    # Coerce NA group_instance_id so we can group safely
+    gi <- effects$group_instance_id
+    gi[is.na(gi)] <- "__no_group__"
+    effects$.dedup_key <- paste0(effects$article_id, "|||", gi)
+    keep <- logical(nrow(effects))
+    for (dk in unique(effects$.dedup_key)) {
+      idx <- which(effects$.dedup_key == dk)
+      if (length(idx) == 1L) {
+        keep[idx] <- TRUE
+      } else {
+        # Keep the row with the latest computed_at (break ties by last row)
+        ts <- effects$computed_at_ts[idx]
+        best <- idx[which.max(ts)]
+        keep[best] <- TRUE
+      }
+    }
+    n_dropped <- sum(!keep)
+    if (n_dropped > 0) {
+      message(sprintf("[build_full_export] Deduplicated %d stale effect_size row(s)", n_dropped))
+    }
+    effects <- effects[keep, , drop = FALSE]
+    effects$computed_at_ts <- NULL
+    effects$.dedup_key    <- NULL
   }
 
   # 6. Flatten raw_effect_json into prefixed columns
@@ -459,13 +517,71 @@ build_full_export <- function(project_id, filters = list(), token = NULL) {
     effect_export <- data.frame()
   }
 
-  # 7. Merge: articles ← labels ← effects
+  # 7. Identify which group(s) contain an effect_size label.
+  #    Effect data should only appear on rows from those groups (or on
+  #    articles with no groups at all).  This prevents duplicating the
+  #    effect size across every label-group row in the export.
+  es_group_names <- character(0)
+  if (is.data.frame(labels) && nrow(labels) > 0) {
+    safe_char2 <- function(x) {
+      if (is.list(x)) vapply(x, function(v) if (is.null(v) || (length(v) == 1 && is.na(v))) NA_character_ else as.character(v[[1]]), character(1))
+      else as.character(x)
+    }
+    lbl_vtype <- safe_char2(labels$variable_type)
+    lbl_pid   <- safe_char2(labels$parent_label_id)
+    lbl_pid[is.na(lbl_pid)] <- ""
+    es_child_idx <- which(lbl_vtype == "effect_size" & lbl_pid != "")
+    if (length(es_child_idx) > 0) {
+      es_parent_ids <- unique(lbl_pid[es_child_idx])
+      lbl_lid <- safe_char2(labels$label_id)
+      lbl_nm  <- safe_char2(labels$name)
+      parent_match <- which(lbl_lid %in% es_parent_ids)
+      es_group_names <- lbl_nm[parent_match]
+      es_group_names <- es_group_names[!is.na(es_group_names)]
+    }
+  }
+
+  # 8. Merge: articles ← labels ← effects
   # First merge articles with label data
   merged <- merge(articles, label_df, by = "article_id", all.x = TRUE)
 
-  # Then merge with effects (may create additional rows if multiple effects per article)
+  # Then merge with effects using composite key (article_id + group_instance_id)
+  # to avoid cross-joining multiple effect rows across label-group rows.
+  # Use a sentinel for NA group_instance_id so R's merge() can match NULLs.
   if (nrow(effect_export) > 0) {
-    merged <- merge(merged, effect_export, by = "article_id", all.x = TRUE)
+    sentinel <- "__no_group__"
+    if ("group_instance_id" %in% names(merged) &&
+        "group_instance_id" %in% names(effect_export)) {
+      merged$group_instance_id[is.na(merged$group_instance_id)]               <- sentinel
+      effect_export$group_instance_id[is.na(effect_export$group_instance_id)] <- sentinel
+      merged <- merge(merged, effect_export,
+                      by = c("article_id", "group_instance_id"), all.x = TRUE)
+      merged$group_instance_id[merged$group_instance_id == sentinel] <- NA_character_
+    } else {
+      # Fallback for schemas without group_instance_id
+      merged <- merge(merged, effect_export, by = "article_id", all.x = TRUE)
+    }
+  }
+
+  # 9. Remove duplicated effect data from non-effect-size group rows.
+  #    If there are multiple label groups but only some contain an
+  #    effect_size label, blank out effect columns on rows from groups
+  #    that do NOT hold the effect size.  This avoids the cross-join
+  #    duplication the user reported.
+  if (length(es_group_names) > 0 &&
+      "group_name" %in% names(merged) &&
+      nrow(effect_export) > 0) {
+    effect_cols <- setdiff(names(effect_export), "article_id")
+    # Also include any raw_ columns added via cbind
+    effect_cols <- intersect(effect_cols, names(merged))
+    # Rows from a group that is NOT the effect-size group
+    non_es_rows <- !is.na(merged$group_name) &
+                   !(merged$group_name %in% es_group_names)
+    if (any(non_es_rows)) {
+      for (ec in effect_cols) {
+        merged[[ec]][non_es_rows] <- NA
+      }
+    }
   }
 
   # Sort by article_num (or article_id)
@@ -489,50 +605,325 @@ build_full_export <- function(project_id, filters = list(), token = NULL) {
 
 #' Assemble the meta-analysis-ready export
 #'
-#' Filtered to articles where effect_status indicates a computed effect.
+#' Includes all articles with a computed effect status. Rows that are
+#' missing yi or vi are included but flagged so the export is never
+#' blocked.
 #' Columns: article_id, yi (= Fisher Z), vi (= var_z), effect_status,
-#' plus label columns as moderator variables.
+#' meta_flag (quality flag), plus label columns as moderator variables.
 #'
 #' @param project_id UUID of the project
 #' @param filters    Filter criteria
 #' @param token      User JWT
 #' @return           Data frame compatible with metafor::rma(yi=yi, vi=vi, data=df)
 build_meta_export <- function(project_id, filters = list(), token = NULL) {
-  # Force effect_status filter to only computed effects
+  # Statuses that represent a successfully-computed effect size
   meta_statuses <- c("calculated", "small_sd_used", "iqr_sd_used", "calculated_relative")
 
-  # If user specified additional filters on effect_status, intersect
+  # If the user narrowed the effect_status filter to specific computed statuses,
+  # honour that choice — but only intersect within the computed list.
+  # Non-computed values (e.g. "insufficient_data") are silently ignored here.
   if (!is.null(filters$effect_status) && length(filters$effect_status) > 0) {
-    meta_statuses <- intersect(meta_statuses, filters$effect_status)
-    if (length(meta_statuses) == 0) return(data.frame())
+    user_computed <- intersect(meta_statuses, filters$effect_status)
+    if (length(user_computed) > 0) {
+      meta_statuses <- user_computed
+    }
+    # If the user only selected non-computed statuses, keep all meta_statuses.
   }
-  filters$effect_status <- meta_statuses
 
-  # Build full export with the restricted effect_status filter
-  full <- build_full_export(project_id, filters, token)
-  if (!is.data.frame(full) || nrow(full) == 0) return(data.frame())
+  # Fetch the full export WITHOUT an effect_status restriction so that the
+  # effect columns (z, var_z) are always present in the merged data frame.
+  # We apply the status filter ourselves below, which avoids an empty
+  # effect_export causing z/var_z columns to be absent entirely.
+  filters_for_full <- filters
+  filters_for_full$effect_status <- NULL          # fetch all effects
+  full <- build_full_export(project_id, filters_for_full, token)
 
-  # Keep only rows that have z and var_z
-  if (!"z" %in% names(full) || !"var_z" %in% names(full)) return(data.frame())
-  full <- full[!is.na(full$z) & !is.na(full$var_z), , drop = FALSE]
-  if (nrow(full) == 0) return(data.frame())
+  # Helper: return an empty data frame carrying a diagnostic message attribute
+  .empty <- function(msg) {
+    message("[meta_export] ", msg)
+    df <- data.frame()
+    attr(df, "meta_export_msg") <- msg
+    df
+  }
+
+  if (!is.data.frame(full) || nrow(full) == 0) {
+    return(.empty(paste0(
+      "No articles matched the current filters (review status = '",
+      paste(filters$review_status %||% "reviewed", collapse = ", "),
+      "'). Check that articles have been saved via Save/Next.")))
+  }
+
+  # If no effect columns present at all, nothing was joined — return empty.
+  if (!"z" %in% names(full) || !"var_z" %in% names(full) ||
+      !"effect_status" %in% names(full)) {
+    return(.empty(paste0(
+      "No effect size data was found for the ", nrow(full), " article(s) matching ",
+      "the filters. Open each article in the Review tab and click Save/Next to ",
+      "compute and store the effect size.")))
+  }
+
+  n_total      <- nrow(full)
+  n_no_status  <- sum(is.na(full$effect_status))
+  n_bad_status <- sum(!is.na(full$effect_status) &
+                      !trimws(as.character(full$effect_status)) %in% meta_statuses)
+  n_no_z    <- sum(!is.na(full$effect_status) &
+                   trimws(as.character(full$effect_status)) %in% meta_statuses &
+                   is.na(full$z))
+  n_no_varz <- sum(!is.na(full$effect_status) &
+                   trimws(as.character(full$effect_status)) %in% meta_statuses &
+                   !is.na(full$z) & is.na(full$var_z))
+
+  message(sprintf("[meta_export] total rows: %d, no status: %d, non-computed status: %d, computed but z=NA: %d, computed+z but var_z=NA: %d",
+                  n_total, n_no_status, n_bad_status, n_no_z, n_no_varz))
+
+  # Keep only rows with a computed effect status (but do NOT require
+  # z and var_z — incomplete rows are flagged instead of dropped).
+  full <- full[
+    !is.na(full$effect_status) &
+    trimws(as.character(full$effect_status)) %in% meta_statuses, , drop = FALSE]
+
+  if (nrow(full) == 0) {
+    statuses_found <- sort(unique(na.omit(trimws(as.character(
+      build_full_export(project_id, filters_for_full, token)$effect_status)))))
+    msg <- if (length(statuses_found) > 0) {
+      paste0(n_total, " article(s) found but effect_status values (",
+             paste(statuses_found, collapse = ", "),
+             ") are not in the required computed set (",
+             paste(meta_statuses, collapse = ", "), ").")
+    } else {
+      paste0(n_total, " article(s) found but none have a stored effect size. Open ",
+             "each article in the Review tab and click Save/Next.")
+    }
+    return(.empty(msg))
+  }
 
   # Rename z → yi, var_z → vi for metafor compatibility
   names(full)[names(full) == "z"]     <- "yi"
   names(full)[names(full) == "var_z"] <- "vi"
 
-  # Drop raw_ columns and other non-essential columns for the meta export
-  drop_prefix <- grep("^raw_", names(full))
+  # Add meta_flag column: flag rows that are incomplete for meta-analysis
+  full$meta_flag <- NA_character_
+  yi_missing  <- is.na(full$yi)
+  vi_missing  <- is.na(full$vi)
+  both_ok     <- !yi_missing & !vi_missing
+  full$meta_flag[both_ok]                 <- "ok"
+  full$meta_flag[yi_missing]              <- "yi_missing"
+  full$meta_flag[!yi_missing & vi_missing] <- "vi_missing (enter sample size n)"
+
+  n_flagged <- sum(full$meta_flag != "ok", na.rm = TRUE)
+  if (n_flagged > 0) {
+    msg <- sprintf(
+      "%d of %d row(s) are flagged — see the meta_flag column. %s",
+      n_flagged, nrow(full),
+      if (any(vi_missing & !yi_missing))
+        "Rows with vi_missing need sample size (n) entered in the Review tab."
+      else "")
+    attr(full, "meta_export_msg") <- msg
+    message("[meta_export] ", msg)
+  }
+
+  # Drop non-essential columns for the meta export
+  # (keep raw_ columns as they contain study metadata and entered statistics)
   drop_cols   <- c("effect_id", "group_instance_id", "effect_warnings",
                     "abstract", "computed_at", "effect_type",
                     "upload_batch_id")
   drop_idx    <- which(names(full) %in% drop_cols)
-  all_drops   <- unique(c(drop_prefix, drop_idx))
-  if (length(all_drops) > 0) {
-    full <- full[, -all_drops, drop = FALSE]
+  if (length(drop_idx) > 0) {
+    full <- full[, -drop_idx, drop = FALSE]
   }
 
   # Keep r alongside yi/vi for reference
   rownames(full) <- NULL
   full
+}
+
+#' Build raw JSON export
+#'
+#' Returns a nested list structure suitable for serialising to JSON.
+#' Each article is an object with its metadata, labels, and effect sizes.
+#'
+#' @param project_id UUID of the project
+#' @param filters    Filter criteria
+#' @param token      User JWT
+#' @return           Character string of pretty-printed JSON
+build_json_export <- function(project_id, filters = list(), token = NULL) {
+  # 1. Fetch filtered articles
+  articles <- .fetch_filtered_articles(project_id, filters, token)
+  if (!is.data.frame(articles) || nrow(articles) == 0) return("[]")
+
+  article_ids <- articles$article_id
+  aid_str <- paste0("(", paste(article_ids, collapse = ","), ")")
+
+  # 2. Fetch label schema to determine which groups contain effect_size labels
+  labels <- tryCatch(
+    sb_get("labels",
+      filters = list(project_id = project_id),
+      select  = "label_id,label_type,parent_label_id,name,variable_type",
+      token   = token),
+    error = function(e) data.frame()
+  )
+
+  # Build mapping: group_name → es_label_name
+  # e.g., "study_site" → "effect_size_data"
+  es_group_map <- list()   # group_name → es_label_name
+  has_toplevel_es <- FALSE
+  if (is.data.frame(labels) && nrow(labels) > 0) {
+    lbl_vtype <- as.character(labels$variable_type)
+    lbl_pid   <- as.character(labels$parent_label_id)
+    lbl_pid[is.na(lbl_pid)] <- ""
+    lbl_lid   <- as.character(labels$label_id)
+    lbl_nm    <- as.character(labels$name)
+    es_idx    <- which(lbl_vtype == "effect_size")
+    for (ei in es_idx) {
+      parent <- lbl_pid[ei]
+      if (nchar(parent) > 0) {
+        # effect_size inside a group → find parent group name
+        parent_match <- which(lbl_lid == parent)
+        if (length(parent_match) > 0) {
+          gname <- lbl_nm[parent_match[1]]
+          es_group_map[[gname]] <- lbl_nm[ei]
+        }
+      } else {
+        has_toplevel_es <- TRUE
+      }
+    }
+  }
+
+  # 3. Fetch article_metadata_json
+  metadata <- tryCatch(
+    sb_get("article_metadata_json",
+      filters = list(article_id = paste0("in.", aid_str)),
+      select  = "article_id,json_data",
+      token   = token),
+    error = function(e) data.frame()
+  )
+
+  # 4. Fetch effect_sizes
+  effects <- tryCatch(
+    sb_get("effect_sizes",
+      filters = list(article_id = paste0("in.", aid_str)),
+      select  = "effect_id,article_id,group_instance_id,raw_effect_json,r,z,var_z,effect_status,effect_warnings,computed_at",
+      token   = token),
+    error = function(e) data.frame()
+  )
+
+  # Apply effect_status filter if specified
+  if (!is.null(filters$effect_status) && length(filters$effect_status) > 0 &&
+      is.data.frame(effects) && nrow(effects) > 0) {
+    effects <- effects[effects$effect_status %in% filters$effect_status, , drop = FALSE]
+  }
+
+  # 4b. Deduplicate stale effect rows (same logic as build_full_export)
+  if (is.data.frame(effects) && nrow(effects) > 1 &&
+      "computed_at" %in% names(effects)) {
+    effects$computed_at_ts <- as.POSIXct(effects$computed_at, tz = "UTC")
+    gi <- effects$group_instance_id
+    gi[is.na(gi)] <- "__no_group__"
+    effects$.dedup_key <- paste0(effects$article_id, "|||", gi)
+    keep <- logical(nrow(effects))
+    for (dk in unique(effects$.dedup_key)) {
+      idx <- which(effects$.dedup_key == dk)
+      if (length(idx) == 1L) {
+        keep[idx] <- TRUE
+      } else {
+        ts <- effects$computed_at_ts[idx]
+        best <- idx[which.max(ts)]
+        keep[best] <- TRUE
+      }
+    }
+    n_dropped <- sum(!keep)
+    if (n_dropped > 0) {
+      message(sprintf("[build_json_export] Deduplicated %d stale effect_size row(s)", n_dropped))
+    }
+    effects <- effects[keep, , drop = FALSE]
+    effects$computed_at_ts <- NULL
+    effects$.dedup_key    <- NULL
+  }
+
+  # Helper: parse one effect row into a clean list
+  .parse_es_row <- function(j) {
+    es_row <- as.list(effects[j, ])
+    rj <- tryCatch(effects$raw_effect_json[[j]], error = function(e) NULL)
+    if (is.list(rj) && length(rj) == 1 && is.null(names(rj))) rj <- rj[[1]]
+    if (is.character(rj) && length(rj) == 1) {
+      rj <- tryCatch(jsonlite::fromJSON(rj, simplifyVector = FALSE),
+                      error = function(e) rj)
+    }
+    es_row$raw_effect_json <- rj
+    ew <- tryCatch(effects$effect_warnings[[j]], error = function(e) NULL)
+    if (is.list(ew)) ew <- unlist(ew)
+    es_row$effect_warnings <- as.list(ew)
+    es_row
+  }
+
+  # Build a list per article
+  result <- lapply(seq_len(nrow(articles)), function(i) {
+    aid <- articles$article_id[i]
+    art <- as.list(articles[i, ])
+
+    # Attach label metadata (raw JSON/list)
+    if (is.data.frame(metadata) && nrow(metadata) > 0) {
+      idx <- which(metadata$article_id == aid)
+      if (length(idx) > 0) {
+        raw_jd <- tryCatch(metadata$json_data[[idx[1]]], error = function(e) NULL)
+        art$labels <- .parse_json_data(raw_jd)
+      }
+    }
+
+    # Collect effect sizes for this article
+    if (is.data.frame(effects) && nrow(effects) > 0) {
+      es_idx <- which(effects$article_id == aid)
+      if (length(es_idx) > 0) {
+        parsed_es <- lapply(es_idx, .parse_es_row)
+
+        # Embed effect sizes with group_instance_id into their
+        # parent group instances inside art$labels
+        toplevel_es <- list()
+        for (es in parsed_es) {
+          gi_id <- es$group_instance_id
+          if (!is.null(gi_id) && !is.na(gi_id) && nchar(gi_id) > 0) {
+            # Parse group_instance_id: "group_name_N"
+            # Find matching group by checking all known ES groups
+            matched <- FALSE
+            for (gname in names(es_group_map)) {
+              prefix <- paste0(gname, "_")
+              if (startsWith(gi_id, prefix)) {
+                inst_num <- suppressWarnings(
+                  as.integer(sub(paste0("^", prefix), "", gi_id)))
+                if (!is.na(inst_num) && !is.null(art$labels[[gname]]) &&
+                    is.list(art$labels[[gname]]) &&
+                    inst_num <= length(art$labels[[gname]])) {
+                  es_label_name <- es_group_map[[gname]]
+                  # Embed: drop group_instance_id from the nested object
+                  es_embed <- es
+                  es_embed$group_instance_id <- NULL
+                  art$labels[[gname]][[inst_num]][[es_label_name]] <- es_embed
+                  matched <- TRUE
+                }
+                break
+              }
+            }
+            if (!matched) {
+              # Couldn't match to a group instance — keep as top-level
+              toplevel_es <- c(toplevel_es, list(es))
+            }
+          } else {
+            # No group_instance_id — top-level or stale
+            if (has_toplevel_es) {
+              toplevel_es <- c(toplevel_es, list(es))
+            }
+            # else: stale row from before multi-instance — omit
+          }
+        }
+
+        if (length(toplevel_es) > 0) {
+          art$effect_sizes <- toplevel_es
+        }
+      }
+    }
+    art
+  })
+
+  jsonlite::toJSON(result, auto_unbox = TRUE, pretty = TRUE, null = "null",
+                   na = "null", force = TRUE)
 }

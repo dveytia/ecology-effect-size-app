@@ -122,6 +122,8 @@ CREATE TABLE IF NOT EXISTS public.effect_sizes (
                       'calculated', 'insufficient_data', 'small_sd_used',
                       'calculated_relative', 'iqr_sd_used'
                     )),
+  effect_type       TEXT NOT NULL DEFAULT 'zero_order'
+                    CHECK (effect_type IN ('zero_order', 'partial')),
   effect_warnings   TEXT[],
   computed_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
