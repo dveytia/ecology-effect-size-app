@@ -227,9 +227,24 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
     })
 
     # ===========================================================
-    # ACTION: Create project — modal
+    # ACTION: Create project — modal (with optional clone)
     # ===========================================================
     observeEvent(input$btn_new_project, {
+      # Build choices: all projects the user can access (owned + joined)
+      clone_choices <- c("(Blank project)" = "")
+      tryCatch({
+        own <- owned_projects()
+        jnd <- joined_projects()
+        all_proj <- rbind(
+          if (is.data.frame(own) && nrow(own) > 0) own[, c("project_id", "title"), drop = FALSE] else data.frame(),
+          if (is.data.frame(jnd) && nrow(jnd) > 0) jnd[, c("project_id", "title"), drop = FALSE] else data.frame()
+        )
+        if (is.data.frame(all_proj) && nrow(all_proj) > 0) {
+          opts <- setNames(all_proj$project_id, all_proj$title)
+          clone_choices <- c(clone_choices, opts)
+        }
+      }, error = function(e) NULL)
+
       showModal(modalDialog(
         title  = "New Project",
         size   = "m",
@@ -242,8 +257,76 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
                   placeholder = "e.g. Climate Change Meta-analysis 2025"),
         textAreaInput(ns("new_proj_desc"), "Description (optional)",
                       rows = 3,
-                      placeholder = "Brief summary of the project scope")
+                      placeholder = "Brief summary of the project scope"),
+        hr(),
+        selectInput(ns("clone_from"), "Clone labels from an existing project",
+                    choices = clone_choices,
+                    selected = ""),
+        helpText(
+          icon("info-circle"),
+          " Cloning copies the label schema (names, types, groups) from the",
+          " selected project. Articles, collaborators, and review data are NOT copied."
+        ),
+        uiOutput(ns("clone_preview"))
       ))
+    })
+
+    # Show preview of labels when a clone source is selected
+    observeEvent(input$clone_from, {
+      src_id <- input$clone_from
+      if (is.null(src_id) || nchar(src_id) == 0) {
+        output$clone_preview <- renderUI(NULL)
+        return()
+      }
+      tryCatch({
+        src_labels <- sb_get("labels",
+                             filters = list(project_id = src_id),
+                             select  = "name,display_name,variable_type,label_type,parent_label_id",
+                             token   = session_rv$token)
+        if (!is.data.frame(src_labels) || nrow(src_labels) == 0) {
+          output$clone_preview <- renderUI(
+            div(class = "alert alert-info mt-2 small",
+                icon("info-circle"), " Source project has no labels yet.")
+          )
+          return()
+        }
+        top_level <- src_labels[is.na(src_labels$parent_label_id) |
+                                  src_labels$parent_label_id == "", , drop = FALSE]
+        n_groups  <- sum(top_level$label_type == "group", na.rm = TRUE)
+        n_single  <- sum(top_level$label_type == "single", na.rm = TRUE)
+        n_children <- nrow(src_labels) - nrow(top_level)
+        output$clone_preview <- renderUI(
+          div(class = "alert alert-success mt-2 small",
+              icon("check-circle"),
+              sprintf(" Will clone %d label(s): %d single, %d group(s) with %d children.",
+                      nrow(src_labels), n_single, n_groups, n_children))
+        )
+      }, error = function(e) {
+        output$clone_preview <- renderUI(
+          div(class = "alert alert-warning mt-2 small",
+              icon("exclamation-triangle"),
+              " Could not load labels from source project.")
+        )
+      })
+    }, ignoreNULL = FALSE)
+
+    # Auto-fill description from clone source
+    observeEvent(input$clone_from, {
+      src_id <- input$clone_from
+      if (is.null(src_id) || nchar(src_id) == 0) return()
+      # Only auto-fill if description is currently empty
+      if (nchar(trimws(input$new_proj_desc %||% "")) > 0) return()
+      tryCatch({
+        src_proj <- sb_get("projects",
+                           filters = list(project_id = src_id),
+                           select  = "description",
+                           token   = session_rv$token)
+        if (is.data.frame(src_proj) && nrow(src_proj) > 0 &&
+            !is.na(src_proj$description[1])) {
+          updateTextAreaInput(session, "new_proj_desc",
+                             value = src_proj$description[1])
+        }
+      }, error = function(e) NULL)
     })
 
     observeEvent(input$confirm_new_project, {
@@ -253,14 +336,28 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
         return()
       }
       tryCatch({
-        sb_post("projects",
+        new_proj <- sb_post("projects",
           list(owner_id    = session_rv$user_id,
                title       = title,
                description = trimws(input$new_proj_desc)),
           token = session_rv$token)
+
+        # ---- Clone labels from source project ----------------
+        src_id <- input$clone_from
+        if (!is.null(src_id) && nchar(src_id) > 0) {
+          clone_labels_to_project(
+            source_project_id = src_id,
+            target_project_id = new_proj$project_id,
+            token             = session_rv$token
+          )
+        }
+
         removeModal()
         refresh_trigger(refresh_trigger() + 1)
-        showNotification(paste0("'", title, "' created."), type = "message")
+        clone_msg <- if (!is.null(src_id) && nchar(src_id) > 0)
+                       " (labels cloned)" else ""
+        showNotification(paste0("'", title, "' created", clone_msg, "."),
+                         type = "message")
       }, error = function(e) {
         showNotification(paste("Error creating project:", e$message), type = "error")
       })

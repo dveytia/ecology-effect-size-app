@@ -351,11 +351,11 @@ Export 10+ articles (some with label groups). Open in Excel: no `[object Object]
 
 ## Phase 11: clone a project
 
-**Branch:** `phase-11-project clone`
+**Branch:** `phase-11-clone`
 
 **Deliverables:**
-- `modules/project clone.R` - allows a user to choose to create a blank project or clone a project (i.e. an existing project serves as a template -- the same labels, description, etc are copied, but no articles and no collaborators) from an existing project
-
+- `clone_labels_to_project()` added to `R/utils.R` — copies all labels (single + groups + children) with parent_label_id remapping ✅
+- New Project modal in `modules/mod_dashboard.R` updated with "Clone from" dropdown ✅
 
 **Validation Gate 11:**
 - When creating a new project, a dropdown list is added where a reviewer can choose to clone an existing project. 
@@ -363,8 +363,21 @@ Export 10+ articles (some with label groups). Open in Excel: no `[object Object]
 - in the review tab, the reviewer can see all the labels displayed and able to fill in, exactly as in the source project, but with the new articles.
 - the article data with the corresponding labels exports correctly. 
 
+**Pre-flight:** No new SQL required for Phase 11 (all tables already exist).
 
-**Status:** [ ] Not started
+**Implementation notes:**
+- The **New Project** modal now includes a `selectInput` dropdown labelled "Clone labels from an existing project". It lists all projects the user owns or has joined; the default is "(Blank project)" (no clone).
+- When a source project is selected: a live preview shows the count of labels that will be cloned (N single, M groups with K children). The project description is auto-filled from the source if the description field is still empty.
+- On "Create" click: the project is created first via `sb_post("projects", ...)`, then `clone_labels_to_project()` is called if a source was selected.
+- `clone_labels_to_project()` in `R/utils.R`:
+  1. Fetches all labels from the source project.
+  2. Inserts top-level labels (no `parent_label_id`) first, collecting an `id_map` (old UUID → new UUID).
+  3. Inserts child labels second, remapping `parent_label_id` to the new group UUID via `id_map`.
+  4. All label metadata is preserved: `label_type`, `variable_type`, `allowed_values`, `category`, `instructions`, `mandatory`, `order_index`.
+- Only the label schema is copied. Articles, collaborators, review data, effect sizes, and audit log entries are NOT copied.
+- `helpText` in the modal clarifies what is and is not copied.
+
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
 
@@ -396,6 +409,7 @@ Reviewer JWT cannot access another project's articles directly (API returns 403)
 | 2026-02-22 | Phase 8 Effect Size Engine implemented | `R/effectsize.R` fully implemented with all design pathways (control/treatment Hedges g, correlation, regression, interaction Pathway A & B, time_trend). `tests/test_effectsize.R` has 37 passing assertions (0 failures). `%||%` null-coalesce allows vector warnings to propagate correctly. |
 | 2026-02-22 | Phase 9 Effect Size UI implemented | `modules/mod_effect_size_ui.R` fully implemented with general fields, all 5 study designs, conditional panels, Interaction Pathway A/B (Pathway B with full sub-forms per group), small SD toggle, result display. Wired into `mod_review.R`: effect_size variable_type renders the real module; save triggers computation and upsert to `effect_sizes` table. |
 | 2026-02-22 | Phase 10 Export System implemented | `R/export.R` fully implemented: `unnest_labels()` flattens JSONB label groups into wide-format rows, `.flatten_raw_effect()` prefixes raw fields with `raw_`, `build_full_export()` merges articles+labels+effects, `build_meta_export()` renames z→yi / var_z→vi for metafor. `modules/mod_export.R`: owner-only UI with reviewer/status/date/effect_status filters, preview table, Full Export + Meta-Ready CSV downloads. `tests/test_export.R` has 52 passing assertions. `tests/test_map.R`: 1° grid binning + base-R plot (9 assertions pass). |
+| 2026-03-01 | Phase 11 Clone a Project implemented | `clone_labels_to_project()` added to `R/utils.R`; New Project modal in `mod_dashboard.R` updated with "Clone from" dropdown, label preview, and auto-fill description. Labels (single + groups + children) are copied with parent_label_id remapping. Articles, collaborators, and review data are NOT copied. |
 
 ---
 
