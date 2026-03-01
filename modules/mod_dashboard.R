@@ -459,6 +459,9 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
         update_body$drive_folder_id  <- NA_character_
       }
 
+      # Ensure the JWT is fresh before writing
+      refresh_if_needed(session_rv)
+
       tryCatch({
         result <- sb_patch("projects", "project_id", row$project_id[1],
           update_body,
@@ -466,6 +469,9 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
 
         # Verify the update actually took effect
         if (is.list(result) && length(result) == 0) {
+          message(sprintf(
+            "[dashboard] sb_patch returned empty for project %s (token present: %s)",
+            row$project_id[1], !is.null(session_rv$token)))
           showNotification(
             "Update may not have been saved. Please check your permissions and try again.",
             type = "warning", duration = 8)
@@ -511,6 +517,9 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
       }
 
       pid <- row$project_id[1]
+
+      # Ensure the JWT is fresh before writing
+      refresh_if_needed(session_rv)
 
       # Save URL + folder_id immediately so they persist even if sync fails
       tryCatch(
