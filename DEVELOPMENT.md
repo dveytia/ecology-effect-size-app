@@ -245,7 +245,7 @@ Review 3 articles end-to-end (all labels, label group with 3 instances, skip). V
   - `text` → `textInput`; `integer` / `numeric` → `numericInput`; `boolean` → `checkboxInput`
   - `select one` → `selectInput`; `select multiple` → `checkboxGroupInput`
   - `YYYY-MM-DD` → `dateInput`; `bounding_box` → 4×`numericInput` (lon_min/max, lat_min/max)
-  - `openstreetmap_location` → `textInput` (Phase 11 can add autocomplete)
+  - `openstreetmap_location` → `selectizeInput` with live Nominatim search (≥3 chars). Dropdown entries are colour-coded by geometry type: **green** = Polygon/MultiPolygon, **yellow** = Point (or other geometry), **red** = no geometry data returned. A colour legend is shown below the field. Selected items retain their colour stripe. The `geom_type` field is stored on each selectize item (not persisted to DB) so colours survive re-render from saved data.
   - `effect_size` → stub alert panel (Phase 9 will replace with `mod_effect_size_ui`)
 - Label groups: rendered as collapsible instance cards. Each instance gets a unique key (`inst_key`) so multiple instances of the same group have distinct Shiny input IDs: `lbl_{name}__{key}`.
 - `group_instances` reactiveVal stores `list(group_name = list(key1, key2, ...))`. Adding an instance appends a new key; removing slides it out. The form re-renders via `output$label_form` which reads `group_instances()`.
@@ -327,7 +327,7 @@ Review one article for each of 5 study designs. Test Pathway A and B for interac
   - CSS classes defined in `www/custom.css` (border-left + tinted background)
 - **"Calculate effect size" button:** `actionButton(ns("btn_calculate"))` at the bottom of the form runs `compute_effect_size()` and updates the result display without saving to the database, allowing users to preview results without scrolling to Save
 
-**Status:** [ ] Not started  [x] In progress  [ ] Gate passed
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
 
@@ -344,9 +344,12 @@ Review one article for each of 5 study designs. Test Pathway A and B for interac
 **Validation Gate 10:**
 Export 10+ articles (some with label groups). Open in Excel: no `[object Object]`, all columns present. Run meta-ready export in `metafor::rma(yi=yi, vi=vi, data=df)` without error. Plot a test map using `tests/test_map.R`.
 
-**Status:** [ ] Not started
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
+
+
+**add phase here to allow copying labels between projects**
 
 ## Phase 11: Audit Log & Polish
 
@@ -375,6 +378,7 @@ Reviewer JWT cannot access another project's articles directly (API returns 403)
 | 2026-02-22 | Phase 7 Review Interface implemented | `modules/mod_review.R` fully implemented; wired into `mod_project_home.R` replacing the Phase 7 stub. Dynamic label form (all 10 variable types), label groups with multi-instance add/remove, Save/Next/Skip actions, concurrency conflict detection, audit log writes. Effect size fields stubbed for Phase 9. |
 | 2026-02-22 | Phase 8 Effect Size Engine implemented | `R/effectsize.R` fully implemented with all design pathways (control/treatment Hedges g, correlation, regression, interaction Pathway A & B, time_trend). `tests/test_effectsize.R` has 37 passing assertions (0 failures). `%||%` null-coalesce allows vector warnings to propagate correctly. |
 | 2026-02-22 | Phase 9 Effect Size UI implemented | `modules/mod_effect_size_ui.R` fully implemented with general fields, all 5 study designs, conditional panels, Interaction Pathway A/B (Pathway B with full sub-forms per group), small SD toggle, result display. Wired into `mod_review.R`: effect_size variable_type renders the real module; save triggers computation and upsert to `effect_sizes` table. |
+| 2026-02-22 | Phase 10 Export System implemented | `R/export.R` fully implemented: `unnest_labels()` flattens JSONB label groups into wide-format rows, `.flatten_raw_effect()` prefixes raw fields with `raw_`, `build_full_export()` merges articles+labels+effects, `build_meta_export()` renames z→yi / var_z→vi for metafor. `modules/mod_export.R`: owner-only UI with reviewer/status/date/effect_status filters, preview table, Full Export + Meta-Ready CSV downloads. `tests/test_export.R` has 52 passing assertions. `tests/test_map.R`: 1° grid binning + base-R plot (9 assertions pass). |
 
 ---
 
