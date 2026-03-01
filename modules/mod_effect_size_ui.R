@@ -472,10 +472,12 @@ mod_effect_size_ui_ui <- function(id) {
 mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
                                        project_id_reactive,
                                        on_save_trigger = NULL,
-                                       group_instance_id = NULL) {
+                                       group_instance_id = NULL,
+                                       prefetched_effects = NULL) {
   # Force evaluation of group_instance_id NOW so that each module instance
   # created inside a for-loop captures its own value (R lazy evaluation fix).
   force(group_instance_id)
+  force(prefetched_effects)
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
@@ -497,48 +499,67 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
       .reset_all_fields()
 
       tryCatch({
-        # Build filters: always filter by article_id, and by group_instance_id
-        # if this form belongs to a specific group instance
-        es_filters <- list(article_id = aid)
-        if (!is.null(group_instance_id)) {
-          es_filters$group_instance_id <- group_instance_id
+        # Use pre-fetched effect sizes if available (avoids N+1 queries
+        # when multiple ES modules load simultaneously for the same article).
+        all_rows <- if (!is.null(prefetched_effects)) {
+          tryCatch(prefetched_effects(), error = function(e) data.frame())
+        } else {
+          tryCatch(
+            sb_get("effect_sizes",
+                    filters = list(article_id = aid),
+                    token   = session_rv$token),
+            error = function(e) data.frame()
+          )
         }
-        rows <- sb_get("effect_sizes",
-          filters = es_filters,
-          token   = session_rv$token)
+
+        # Filter for this module's group_instance_id
+        rows <- data.frame()
+        if (is.data.frame(all_rows) && nrow(all_rows) > 0) {
+          if (!is.null(group_instance_id)) {
+            gi_match <- which(!is.na(all_rows$group_instance_id) &
+                                all_rows$group_instance_id == group_instance_id)
+            if (length(gi_match) > 0) {
+              rows <- all_rows[gi_match, , drop = FALSE]
+            }
+          } else {
+            # Top-level (no group): rows with NULL/NA group_instance_id
+            gi_vals <- all_rows$group_instance_id
+            na_match <- which(is.na(gi_vals) | gi_vals == "")
+            if (length(na_match) > 0) {
+              rows <- all_rows[na_match, , drop = FALSE]
+            }
+          }
+        }
 
         # --- Positional fallback for articles saved with counter-based gi_ids ---
         # If no rows match the sequential gi_id (e.g., "study_site_1") but the
         # article HAS effect sizes under different gi_ids (e.g., "study_site_3"),
         # fall back to positional matching.
-        if ((!is.data.frame(rows) || nrow(rows) == 0) && !is.null(group_instance_id)) {
+        if (nrow(rows) == 0 && !is.null(group_instance_id) &&
+            is.data.frame(all_rows) && nrow(all_rows) > 0) {
           pos <- suppressWarnings(
             as.integer(sub(".*_(\\d+)$", "\\1", group_instance_id)))
           if (!is.na(pos)) {
-            all_rows <- sb_get("effect_sizes",
-              filters = list(article_id = aid),
-              token   = session_rv$token)
-            if (is.data.frame(all_rows) && nrow(all_rows) > 0) {
-              # Deduplicate: keep latest per gi_id
-              if ("computed_at" %in% names(all_rows)) {
-                ord  <- order(as.POSIXct(all_rows$computed_at, tz = "UTC"),
-                              decreasing = TRUE)
-                all_rows <- all_rows[ord, , drop = FALSE]
-                all_rows <- all_rows[!duplicated(all_rows$group_instance_id),
-                                     , drop = FALSE]
-              }
-              # Sort gi_ids numerically by trailing number
-              gi_nums <- suppressWarnings(
-                as.integer(sub(".*_(\\d+)$", "\\1",
-                               all_rows$group_instance_id)))
-              gi_nums[is.na(gi_nums)] <- 0L
-              all_rows <- all_rows[order(gi_nums), , drop = FALSE]
-              if (pos <= nrow(all_rows)) {
-                rows <- all_rows[pos, , drop = FALSE]
-                message(sprintf(
-                  "[mod_effect_size_ui] Fallback: loaded position %d for %s (article %s)",
-                  pos, group_instance_id, aid))
-              }
+            # Deduplicate: keep latest per gi_id
+            deduped <- all_rows
+            if ("computed_at" %in% names(deduped)) {
+              ord  <- order(as.POSIXct(deduped$computed_at, tz = "UTC"),
+                            decreasing = TRUE)
+              deduped <- deduped[ord, , drop = FALSE]
+              deduped <- deduped[!duplicated(deduped$group_instance_id),
+                                 , drop = FALSE]
+            }
+            # Sort gi_ids numerically by trailing number
+            gi_nums <- suppressWarnings(
+              as.integer(sub(".*_(\\d+)$", "\\1",
+                             deduped$group_instance_id)))
+            gi_nums[is.na(gi_nums)] <- 0L
+            deduped <- deduped[order(gi_nums), , drop = FALSE]
+            if (pos <= nrow(deduped)) {
+              rows <- deduped[pos, , drop = FALSE]
+              message(sprintf(
+                "[mod_effect_size_ui] Fallback: loaded position %d for %s (article %s)",
+                pos, group_instance_id, aid))
             }
           }
         }
