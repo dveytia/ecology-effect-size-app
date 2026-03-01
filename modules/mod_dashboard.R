@@ -29,11 +29,17 @@ mod_dashboard_ui <- function(id) {
       fluidRow(
         column(6,
           h5(icon("user"), " Projects I Own"),
-          uiOutput(ns("owned_projects"))
+          shinycssloaders::withSpinner(
+            uiOutput(ns("owned_projects")),
+            type = 6, color = "#2C7A4B", size = 0.5
+          )
         ),
         column(6,
           h5(icon("users"), " Projects I've Joined"),
-          uiOutput(ns("joined_projects"))
+          shinycssloaders::withSpinner(
+            uiOutput(ns("joined_projects")),
+            type = 6, color = "#2C7A4B", size = 0.5
+          )
         )
       ),
       hr(),
@@ -438,15 +444,40 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
       drive_url <- trimws(input$edit_proj_drive_url %||% "")
       folder_id <- if (nchar(drive_url) > 0) extract_drive_folder_id(drive_url)
                    else NA_character_
+
+      # Build update body — use NA (not NULL) for cleared fields so
+      # .sb_clean_na converts them to JSON null → SQL NULL
+      update_body <- list(
+        title       = title,
+        description = trimws(input$edit_proj_desc)
+      )
+      if (nchar(drive_url) > 0) {
+        update_body$drive_folder_url <- drive_url
+        update_body$drive_folder_id  <- if (!is.na(folder_id)) folder_id else NA_character_
+      } else {
+        update_body$drive_folder_url <- NA_character_
+        update_body$drive_folder_id  <- NA_character_
+      }
+
+      # Ensure the JWT is fresh before writing
+      refresh_if_needed(session_rv)
+
       tryCatch({
-        sb_patch("projects", "project_id", row$project_id[1],
-          list(
-            title            = title,
-            description      = trimws(input$edit_proj_desc),
-            drive_folder_url = if (nchar(drive_url) > 0) drive_url      else NULL,
-            drive_folder_id  = if (!is.na(folder_id))    folder_id      else NULL
-          ),
+        result <- sb_patch("projects", "project_id", row$project_id[1],
+          update_body,
           token = session_rv$token)
+
+        # Verify the update actually took effect
+        if (is.list(result) && length(result) == 0) {
+          message(sprintf(
+            "[dashboard] sb_patch returned empty for project %s (token present: %s)",
+            row$project_id[1], !is.null(session_rv$token)))
+          showNotification(
+            "Update may not have been saved. Please check your permissions and try again.",
+            type = "warning", duration = 8)
+          return()
+        }
+
         removeModal()
         editing_project(NULL)
         refresh_trigger(refresh_trigger() + 1)
@@ -486,6 +517,9 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
       }
 
       pid <- row$project_id[1]
+
+      # Ensure the JWT is fresh before writing
+      refresh_if_needed(session_rv)
 
       # Save URL + folder_id immediately so they persist even if sync fails
       tryCatch(

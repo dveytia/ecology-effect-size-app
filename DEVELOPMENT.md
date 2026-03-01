@@ -188,6 +188,9 @@ Upload 20 articles. Upload second CSV with 2 exact DOI duplicates, 1 title-year 
 - Reject decision: sets `duplicate_flags.status = 'rejected'` (no article inserted).
 - `shinyjs::reset("csv_file")` clears the file input after a successful upload so the user can upload a second batch immediately.
 - Upload batch record (`uploads` table) is created before article inserts; `rows_uploaded` = clean rows, `rows_flagged` = flagged rows.
+- **Optional `article_num` column:** CSV/TXT files may include an `article_num` integer column to supply the article number explicitly. When present, the value overrides the auto-sequence and is stored directly in the `article_num BIGINT` column on `articles`. This allows users to pre-assign numbers that match their Drive PDF filenames (`[article_num].pdf`) so Google Drive sync works immediately after upload. If the column is absent, `article_num` is assigned automatically by the DB sequence as before. The preview table shows a `#` column when `article_num` is detected. Non-integer values are silently ignored (NULL/sequence falls back). The `article_num` value is also preserved in `duplicate_flags.article_data` JSONB and restored when a flagged row is accepted. Test file: `tests/test_data/gate5_with_article_num.txt`.
+- **Sequence grant:** `sql/07_gdrive_columns.sql` creates `articles_article_num_seq` but does not grant `USAGE` to `authenticated`. Run `sql/11_sequence_grants.sql` once to fix this — required for uploads that do not supply an explicit `article_num` column (the DEFAULT calls `nextval()` which needs the grant).
+- **Robust upload error handling:** The upload handler now validates `batch_id` is non-null before entering the article loop. Per-row errors are collected individually (one bad row no longer aborts the whole batch). A "Partial upload" warning notification is shown when any rows fail, and the per-row error details are written to the R console (`message()`). Fatal batch-creation errors show the exact API error message.
 
 **Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
@@ -206,7 +209,7 @@ Upload 20 articles. Upload second CSV with 2 exact DOI duplicates, 1 title-year 
 **Validation Gate 6:**
 Create public Drive folder. Add 3 valid PDFs + 1 invalid name. Paste URL, click Sync. Verify pdf_drive_link populated for 3 articles, 1 skipped in summary.
 
-**Pre-flight — run `sql/07_gdrive_columns.sql` in Supabase SQL Editor before testing Gate 6.**
+**Pre-flight — run `sql/07_gdrive_columns.sql` and `sql/11_sequence_grants.sql` in Supabase SQL Editor before testing Gate 6.**
 
 **Implementation notes:**
 - `R/gdrive.R` implements four functions: `gdrive_init_oauth()` (one-time interactive auth), `gdrive_init()` (load cached token at startup), `gdrive_list_pdfs()` (Drive API v3 via `httr2`), `sync_drive_folder()` (match + upsert loop).
@@ -383,17 +386,133 @@ Export 10+ articles (some with label groups). Open in Excel: no `[object Object]
 
 ## Phase 12: Audit Log & Polish
 
-**Branch:** `phase-11-polish`
+**Branch:** `phase-12-audit`
 
 **Deliverables:**
-- `modules/mod_audit_log.R`
-- Full RLS tested
-- Loading spinners and error toasts
+- `modules/mod_audit_log.R` — Full audit log viewer with filters (action, user, date range), timestamped table, diff modal showing before/after JSON snapshots
+- `mod_project_home.R` updated — audit log tab wired to real module (stub replaced)
+- Loading spinners (`shinycssloaders`) added to: article list, review panel, export preview, dashboard projects, audit log table
+- Error toasts (`shinytoastr`) — `toast_error()`, `toast_success()`, `toast_warning()` helpers added to `R/utils.R`; `useToastr()` added to `ui.R`; key review save/skip actions converted to toasts
+- CSS polish: audit log diff styling, spinner min-height override
+- `global.R` updated with `shinycssloaders` + `shinytoastr` library calls
+- `DESCRIPTION` updated with new package dependencies
 
-**Validation Gate 11:**
-Reviewer JWT cannot access another project's articles directly (API returns 403). Two-window concurrent save test produces two audit_log entries.
+**Validation Gate 12:**
 
-**Status:** [ ] Not started
+Reviewer JWT cannot access another project's articles directly (API returns 403). Two-window concurrent save test produces two `audit_log` entries and the database contains the most recent save's data.
+
+### How to Run Validation Gate 12 — Step-by-Step
+
+**Prerequisites:**  
+You need two things set up before you start:
+1. The app must be deployed or runnable locally (`shiny::runApp()`)  
+2. You need at least one Supabase user account. Ideally two: one **owner** and one **reviewer**. If you only have one, you can still test the audit log (just not the cross-project RLS test).
+
+---
+
+**Part A: Verify the Audit Log UI works**
+
+1. Open your terminal/R console and run the app:
+   ```r
+   shiny::runApp()
+   ```
+2. Log in with your account credentials.
+3. Open (or create) a project that has at least one uploaded article.
+4. Click the **"Review"** tab → select any article → fill in some fields → click **"Save"**.
+5. Click the **"Audit Log"** tab (the clipboard icon in the project tabs).
+6. **Check:** You should see a table with at least one row showing:
+   - Your save action with a timestamp
+   - Your username/email
+   - The article title
+   - Action = "save" (in green)
+   - A blue diff button (↔ icon)
+7. Click the **diff button** → a modal should open showing "Before" (old JSON) and "After" (new JSON) side by side.
+8. **Check:** The JSON should show the label values you just saved.
+9. Try the **filters**: change "Action" to "save" only, change the date range, check that the table updates correctly.
+10. Go back to the Review tab → select the same article → click **"Skip"**.
+11. Return to the Audit Log tab → click **Refresh**.
+12. **Check:** You should now see both a "save" entry AND a "skip" entry.
+
+**Pass criteria for Part A:** Audit log shows all save/skip actions with correct timestamps, users, and viewable JSON diffs.
+
+---
+
+**Part B: RLS Cross-Project Security Test**
+
+This test verifies that a reviewer in Project A cannot read articles from Project B.
+
+1.  **Set up:** You need a user who is a member of Project A but NOT Project B. If you only have one user who owns both projects, create a second user account (register a new email in the app), then invite that user to Project A only.
+
+2.  **Get the reviewer's JWT token.** The easiest way:
+    - Log in as the reviewer in the app.
+    - In R, find the session token (or add a temporary `cat(session_rv$token)` to server.R).
+    - Alternatively, use the Supabase Dashboard → Authentication → Users → pick the reviewer → use the Supabase client to generate a JWT.
+
+3.  **Make a direct API call** using the reviewer's JWT to try to read articles from Project B (a project they are NOT a member of). Run in R console:
+    ```r
+    source("R/supabase.R")
+    readRenviron(".Renviron")
+    
+    # Replace with the reviewer's actual JWT token
+    REVIEWER_TOKEN <- "eyJ..."
+    
+    # Replace with a project_id the reviewer does NOT have access to
+    OTHER_PROJECT_ID <- "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    
+    result <- tryCatch(
+      sb_get("articles",
+             filters = list(project_id = OTHER_PROJECT_ID),
+             token   = REVIEWER_TOKEN),
+      error = function(e) e$message
+    )
+    print(result)
+    ```
+
+4. **Check:** The result should be an empty data frame (0 rows) or a 403/401 error. The reviewer must NOT see any articles from Project B.
+
+**If you only have one user / one project**, you can verify RLS is enabled by running this in the Supabase SQL Editor:
+```sql
+SELECT tablename, policyname, cmd, roles
+FROM   pg_policies
+WHERE  schemaname = 'public'
+  AND  tablename = 'articles'
+ORDER BY policyname;
+```
+You should see SELECT/INSERT/UPDATE/DELETE policies with `TO authenticated` and `user_can_access_project` checks.
+
+**Pass criteria for Part B:** Reviewer cannot see articles from a project they don't belong to.
+
+---
+
+**Part C: Concurrent Save Test (two-window test)**
+
+1. Open the app in **two separate browser windows** (or tabs). Log in as the **same user** in both.
+2. In both windows, open the **same project** → go to the **Review** tab → select the **same article**.
+3. In **Window 1**: change a label value (e.g. type "test value 1" in a text field) → click **Save**.
+4. In **Window 2** (WITHOUT refreshing): change the same or a different label value (e.g. "test value 2") → click **Save**.
+5. **Check in Window 2:** You should see a **yellow/orange warning toast** saying:  
+   *"Another reviewer saved changes to this article since you loaded it. Your save has been recorded. Review the audit log to check for conflicts."*
+6. Go to the **Audit Log** tab and click **Refresh**.
+7. **Check:** You should see **two separate "save" entries** for the same article, with slightly different timestamps.
+8. Click the diff button on each entry to verify they contain different before/after snapshots.
+
+**Pass criteria for Part C:** Both saves are recorded in the audit log. The concurrency warning appears on the second save.
+
+---
+
+**Part D: UI Polish Verification**
+
+1. **Loading spinners:** Navigate between tabs (Dashboard → project → Review → Export → Audit Log). While data loads, you should see small green spinner animations (not blank white space).
+2. **Error toasts:** Temporarily break your internet connection or set an invalid `SUPABASE_URL` in `.Renviron`. Try to save an article. You should see a red toast notification in the top-right corner (not a plain grey Shiny notification).
+3. **Tooltips:** In the Review tab, hover over or click any ❓ icon next to label fields. A tooltip should appear with plain-language guidance.
+
+**Pass criteria for Part D:** Spinners appear during loading; error toasts are styled (red background, top-right); tooltips work.
+
+---
+
+**All gates passed when:** Parts A + B + C + D all pass.
+
+**Status:** [ ] Not started  [ ] In progress  [ ] Gate passed
 
 ---
 
@@ -410,6 +529,7 @@ Reviewer JWT cannot access another project's articles directly (API returns 403)
 | 2026-02-22 | Phase 9 Effect Size UI implemented | `modules/mod_effect_size_ui.R` fully implemented with general fields, all 5 study designs, conditional panels, Interaction Pathway A/B (Pathway B with full sub-forms per group), small SD toggle, result display. Wired into `mod_review.R`: effect_size variable_type renders the real module; save triggers computation and upsert to `effect_sizes` table. |
 | 2026-02-22 | Phase 10 Export System implemented | `R/export.R` fully implemented: `unnest_labels()` flattens JSONB label groups into wide-format rows, `.flatten_raw_effect()` prefixes raw fields with `raw_`, `build_full_export()` merges articles+labels+effects, `build_meta_export()` renames z→yi / var_z→vi for metafor. `modules/mod_export.R`: owner-only UI with reviewer/status/date/effect_status filters, preview table, Full Export + Meta-Ready CSV downloads. `tests/test_export.R` has 52 passing assertions. `tests/test_map.R`: 1° grid binning + base-R plot (9 assertions pass). |
 | 2026-03-01 | Phase 11 Clone a Project implemented | `clone_labels_to_project()` added to `R/utils.R`; New Project modal in `mod_dashboard.R` updated with "Clone from" dropdown, label preview, and auto-fill description. Labels (single + groups + children) are copied with parent_label_id remapping. Articles, collaborators, and review data are NOT copied. |
+| 2026-03-01 | Phase 12 Audit Log & Polish implemented | `modules/mod_audit_log.R` fully implemented with filters (action/user/date), timestamped table, diff modal. Wired into `mod_project_home.R` (stub replaced). `shinycssloaders` spinners added to article list, review panel, export preview, dashboard, audit log. `shinytoastr` error toasts added via `toast_error/success/warning` helpers in `R/utils.R`; key review actions converted. `global.R` + `DESCRIPTION` updated. CSS polish for audit log and spinner styling. |
 
 ---
 

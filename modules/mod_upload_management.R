@@ -370,17 +370,20 @@ mod_upload_management_server <- function(id, project_id, session_rv,
 
       tryCatch({
         # Insert the article
-        sb_post("articles",
-          list(project_id      = pid,
-               title           = as.character(art_data$title    %||% ""),
-               abstract        = as.character(art_data$abstract %||% ""),
-               author          = as.character(art_data$author   %||% ""),
-               year            = if (!is.null(art_data$year) && !is.na(art_data$year))
-                                   as.integer(art_data$year) else NULL,
-               doi_clean       = as.character(art_data$doi_clean %||% ""),
-               upload_batch_id = batch_id,
-               review_status   = "unreviewed"),
-          token = token)
+        art_payload <- list(
+          project_id      = pid,
+          title           = as.character(art_data$title    %||% ""),
+          abstract        = as.character(art_data$abstract %||% ""),
+          author          = as.character(art_data$author   %||% ""),
+          year            = if (!is.null(art_data$year) && !is.na(art_data$year))
+                              as.integer(art_data$year) else NULL,
+          doi_clean       = as.character(art_data$doi_clean %||% ""),
+          upload_batch_id = batch_id,
+          review_status   = "unreviewed"
+        )
+        if (!is.null(art_data$article_num) && !is.na(art_data$article_num))
+          art_payload$article_num <- as.integer(art_data$article_num)
+        sb_post("articles", art_payload, token = token)
 
         # Update flag to 'accepted'
         sb_patch("duplicate_flags", "flag_id", flag_id,

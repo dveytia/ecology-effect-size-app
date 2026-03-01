@@ -124,6 +124,9 @@ mod_project_home_server <- function(id, project_id, session_rv, app_state) {
       )
     }
 
+    # ---- Shared upload refresh signal -----------------
+    upload_refresh <- reactiveVal(0)
+
     # ---- Review tab (Phase 7) --------------------------------
     output$review_tab <- renderUI({
       req(project_id())
@@ -131,8 +134,9 @@ mod_project_home_server <- function(id, project_id, session_rv, app_state) {
     })
 
     mod_review_server("review",
-                      project_id = project_id,
-                      session_rv = session_rv)
+                      project_id     = project_id,
+                      session_rv     = session_rv,
+                      upload_refresh = upload_refresh)
 
     output$labels_tab <- renderUI({
       req(project_id())
@@ -142,9 +146,6 @@ mod_project_home_server <- function(id, project_id, session_rv, app_state) {
     mod_label_builder_server("label_builder",
                              project_id = project_id,
                              session_rv = session_rv)
-
-    # ---- Shared upload refresh signal -----------------
-    upload_refresh <- reactiveVal(0)
 
     output$upload_tab <- renderUI({
       req(project_id())
@@ -177,8 +178,12 @@ mod_project_home_server <- function(id, project_id, session_rv, app_state) {
 
     output$auditlog_tab <- renderUI({
       req(project_id())
-      .stub_tab(11, "Audit Log", "clipboard-list")
+      mod_audit_log_ui(ns("audit_log"))
     })
+
+    mod_audit_log_server("audit_log",
+                         project_id = project_id,
+                         session_rv = session_rv)
 
     # ---- Members tab ----------------------------------------
     output$members_tab <- renderUI({

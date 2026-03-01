@@ -84,6 +84,22 @@ body {
 .audit-action-skip   { color: #e65100; font-weight: 600; }
 .audit-action-delete { color: #c62828; font-weight: 600; }
 
+/* Audit log diff modal JSON blocks */
+.audit-diff-block pre {
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+/* Audit log filter row compact styling */
+.audit-filters .form-group {
+  margin-bottom: 0.5rem;
+}
+
+/* ---- Loading spinner override ----------------------------- */
+.shiny-spinner-output-container {
+  min-height: 60px;
+}
+
 /* ---- Effect size pathway colour coding ------------------- */
 /* Pathway A – Primary (green tint) */
 .effect-size-block .es-pathway-a,
