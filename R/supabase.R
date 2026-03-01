@@ -76,6 +76,21 @@
   })
 }
 
+# Recursively convert NA scalars to NULL in a body list so that
+# jsonlite serialises them as JSON null instead of the string "NA".
+# Only touches top-level scalar elements (not nested lists/data.frames).
+.sb_clean_na <- function(body) {
+  for (nm in names(body)) {
+    v <- body[[nm]]
+    if (is.atomic(v) && length(v) == 1 && !is.null(v) && is.na(v)) {
+      body[[nm]] <- NULL
+      body[[nm]] <- NULL  # removes element; re-add as NULL for jsonlite null="null"
+      body[nm]   <- list(NULL)
+    }
+  }
+  body
+}
+
 # ---- CRUD functions -----------------------------------------
 
 #' GET rows from a table
@@ -105,11 +120,12 @@ sb_get <- function(table, filters = list(), select = "*", token = NULL) {
 #' @param token  User JWT
 #' @return       Inserted row as a list
 sb_post <- function(table, body, token = NULL) {
+  body <- .sb_clean_na(body)
   # Log the INSERT for debugging RLS issues (Phase 3)
   if (getOption("sb.debug", FALSE)) {
     tok_preview <- if (!is.null(token)) substr(token, 1, 20) else "NULL"
     message(sprintf("[sb_post] table=%s token=%s... body=%s",
-                    table, tok_preview, jsonlite::toJSON(body, auto_unbox = TRUE)))
+                    table, tok_preview, jsonlite::toJSON(body, auto_unbox = TRUE, null = "null")))
   }
   req <- .sb_base_req(paste0("/rest/v1/", table), token) |>
     httr2::req_body_json(body) |>
@@ -129,6 +145,7 @@ sb_post <- function(table, body, token = NULL) {
 #' @param token    User JWT
 #' @return         Updated row as a list
 sb_patch <- function(table, id_col, id_val, body, token = NULL) {
+  body <- .sb_clean_na(body)
   req <- .sb_base_req(paste0("/rest/v1/", table), token) |>
     httr2::req_url_query(!!id_col := paste0("eq.", id_val)) |>
     httr2::req_body_json(body) |>

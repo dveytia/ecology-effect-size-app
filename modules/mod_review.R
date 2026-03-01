@@ -71,9 +71,13 @@ mod_review_server <- function(id, project_id, session_rv) {
     # group_instances: named list  group_name -> list of instance keys (strings)
     group_instances    <- reactiveVal(list())
     # Effect size save trigger (incremented on Save to signal the ES module)
-    es_save_trigger    <- reactiveVal(0)
+    es_save_trigger    <- reactiveVal(0)   # kept for API compat, no longer used
+    # Monotonic counter per group for generating unique instance keys.
+    # Needed for Add Instance: if user removes instance 2 of 3 then adds
+    # a new one, the counter ensures a fresh key (4) rather than reusing 3.
+    es_instance_counter <- list()
 
-    # ---- Simple unique key generator -----------------------
+    # ---- Simple unique key generator (for non-ES label inputs only) ----
     .new_key <- function() paste0(sample(c(letters[1:6], 0:9), 8, replace = TRUE),
                                    collapse = "")
 
@@ -161,10 +165,16 @@ mod_review_server <- function(id, project_id, session_rv) {
       current_article_id(aid)
       loaded_at(Sys.time())
 
+      # Do NOT clear es_started_keys or es_module_entries — module servers
+      # are permanent in Shiny and are REUSED across article switches.
+      # Their observeEvent(article_id_reactive()) fires automatically
+      # when the article changes, loading the correct data.
+
       # Re-fetch labels so newly added labels are visible
       labels_refresh(labels_refresh() + 1L)
 
       # Build group_instances from existing metadata
+      # Keys are DETERMINISTIC: paste0(gname, "_", j) matching group_instance_id
       meta  <- .load_meta(aid)
       lbls  <- project_labels()
       insts <- list()
@@ -181,20 +191,84 @@ mod_review_server <- function(id, project_id, session_rv) {
           n_exist  <- if (is.list(existing)) {
             if (length(existing) > 0) length(existing) else 1L
           } else 1L
-          insts[[gname]] <- lapply(seq_len(n_exist), function(.) .new_key())
+          insts[[gname]] <- lapply(seq_len(n_exist), function(j)
+            paste0(gname, "_", j))
+          # Update monotonic counter to at least n_exist
+          es_instance_counter[[gname]] <<- max(
+            es_instance_counter[[gname]] %||% 0L, n_exist)
         }
       }}
       group_instances(insts)
     }
 
     # ---- Effect size module server call ----
+    # For top-level effect_size labels (not inside a group), a single module:
     es_module <- mod_effect_size_ui_server(
       "effect_size_form",
       session_rv         = session_rv,
       article_id_reactive = current_article_id,
       project_id_reactive = project_id,
-      on_save_trigger    = es_save_trigger
+      group_instance_id  = NULL
     )
+
+    # For grouped effect_size labels, modules are started dynamically.
+    # Track started keys so we don't start duplicate module servers.
+    es_started_keys  <- character(0)         # plain vector (module scope)
+    es_module_entries <- list()              # key → list(module, group_name, gi_id)
+
+    # Helper: identify which group names contain an effect_size label
+    .find_es_groups <- function(lbls) {
+      if (!is.data.frame(lbls) || nrow(lbls) == 0) return(character(0))
+      vtype <- as.character(lbls$variable_type)
+      pid   <- as.character(lbls$parent_label_id)
+      pid[is.na(pid)] <- ""
+      lid   <- as.character(lbls$label_id)
+      lnm   <- as.character(lbls$name)
+      es_idx <- which(vtype == "effect_size" & pid != "")
+      if (length(es_idx) == 0) return(character(0))
+      parent_ids <- unique(pid[es_idx])
+      lnm[which(lid %in% parent_ids)]
+    }
+
+    # Start module servers for new group instances that have an effect_size label.
+    # Module IDs are DETERMINISTIC (e.g. "es_study_site_1") so they are
+    # created exactly once and reused across article switches — eliminating
+    # zombie module servers entirely.
+    observeEvent(group_instances(), {
+      insts <- group_instances()
+      aid   <- current_article_id()
+      if (is.null(aid)) return()
+      lbls <- project_labels()
+      es_groups <- .find_es_groups(lbls)
+      if (length(es_groups) == 0) return()
+
+      for (gname in es_groups) {
+        keys <- insts[[gname]]
+        if (is.null(keys)) next
+        for (j in seq_along(keys)) {
+          key    <- keys[[j]]          # e.g. "study_site_1"
+          mod_id <- paste0("es_", key)  # e.g. "es_study_site_1"
+          if (!(mod_id %in% es_started_keys)) {
+            mod <- mod_effect_size_ui_server(
+              mod_id,
+              session_rv          = session_rv,
+              article_id_reactive = current_article_id,
+              project_id_reactive = project_id,
+              group_instance_id   = key   # key IS the gi_id
+            )
+            es_started_keys  <<- c(es_started_keys, mod_id)
+            es_module_entries[[mod_id]] <<- list(
+              module     = mod,
+              group_name = gname,
+              key        = key,
+              gi_id      = key
+            )
+          }
+        }
+      }
+      # Repopulation of existing modules is handled automatically by each
+      # ES module's ui_render_token observer (self-detecting UI re-render).
+    }, ignoreInit = TRUE)
 
     # Reset when project changes
     observeEvent(project_id(), {
@@ -460,7 +534,10 @@ mod_review_server <- function(id, project_id, session_rv) {
             n_exist  <- if (is.list(existing)) {
                           if (length(existing) > 0) length(existing) else 1L
                         } else 1L
-            insts[[gn]] <- lapply(seq_len(n_exist), function(.) .new_key())
+            insts[[gn]] <- lapply(seq_len(n_exist), function(j)
+              paste0(gn, "_", j))
+            es_instance_counter[[gn]] <<- max(
+              es_instance_counter[[gn]] %||% 0L, n_exist)
             changed <- TRUE
           } else if (length(gn_insts) == 0) {
             # Allow zero instances — user explicitly removed all
@@ -608,8 +685,10 @@ mod_review_server <- function(id, project_id, session_rv) {
                   osm_id = as.character(loc$osm_id %||% "")
                 )
                 if (!is.null(loc$geojson)) obj$geojson <- loc$geojson
+                geom_type <- if (!is.null(loc$geojson) && !is.null(loc$geojson$type))
+                  loc$geojson$type else "none"
                 enc <- as.character(jsonlite::toJSON(obj, auto_unbox = TRUE))
-                osm_opts <- c(osm_opts, list(list(value = enc, label = loc$name)))
+                osm_opts <- c(osm_opts, list(list(value = enc, label = loc$name, geom_type = geom_type)))
                 osm_sel  <- c(osm_sel, enc)
               }
             }
@@ -643,9 +722,11 @@ mod_review_server <- function(id, project_id, session_rv) {
                             osm_id: String(d.osm_id)
                         };
                         if (d.geojson) { obj.geojson = d.geojson; }
+                        var geom_type = (d.geojson && d.geojson.type) ? d.geojson.type : 'none';
                         return {
                           value: JSON.stringify(obj),
-                          label: d.display_name
+                          label: d.display_name,
+                          geom_type: geom_type
                         };
                       }));
                     })
@@ -653,10 +734,27 @@ mod_review_server <- function(id, project_id, session_rv) {
                 }"),
                 render = I("{
                   option: function(item, escape) {
-                    return '<div>' + escape(item.label) + '</div>';
+                    var gt = item.geom_type || 'none';
+                    var color = '#dc3545';
+                    var title = 'No geometry data';
+                    if (gt === 'Polygon' || gt === 'MultiPolygon') {
+                      color = '#198754'; title = 'Polygon / MultiPolygon';
+                    } else if (gt !== 'none') {
+                      color = '#ffc107'; title = 'Point location';
+                    }
+                    return '<div style=\"border-left:4px solid ' + color +
+                           '; padding-left:6px; padding-top:2px; padding-bottom:2px;\" title=\"' +
+                           title + '\">' + escape(item.label) + '</div>';
                   },
                   item: function(item, escape) {
                     var lbl = item.label;
+                    var gt = item.geom_type || 'none';
+                    var color = '#dc3545';
+                    if (gt === 'Polygon' || gt === 'MultiPolygon') {
+                      color = '#198754';
+                    } else if (gt !== 'none') {
+                      color = '#ffc107';
+                    }
                     try {
                       var d = JSON.parse(item.value);
                       lbl = d.name || item.label;
@@ -664,19 +762,33 @@ mod_review_server <- function(id, project_id, session_rv) {
                         lbl += ' (' + Number(d.lat).toFixed(2) + ', ' + Number(d.lon).toFixed(2) + ')';
                       }
                     } catch(e) {}
-                    return '<div>' + escape(lbl) + '</div>';
+                    return '<div style=\"border-left:4px solid ' + color +
+                           '; padding-left:4px;\">' + escape(lbl) + '</div>';
                   }
                 }")
               )
             ),
-            tags$small(class = "text-muted",
-                       "Type at least 3 characters to search OpenStreetMap")
+            tags$div(class = "d-flex flex-wrap gap-3 mt-1",
+              tags$small(class = "text-muted",
+                "Type at least 3 characters to search OpenStreetMap"),
+              tags$small(
+                tags$span(style = "display:inline-block;width:10px;height:10px;background:#198754;border-radius:2px;margin-right:3px;"),
+                "Polygon / MultiPolygon",
+                tags$span(style = "display:inline-block;width:10px;height:10px;background:#ffc107;border-radius:2px;margin-left:8px;margin-right:3px;"),
+                "Point",
+                tags$span(style = "display:inline-block;width:10px;height:10px;background:#dc3545;border-radius:2px;margin-left:8px;margin-right:3px;"),
+                "No geometry"
+              )
+            )
           )
         },
 
         "effect_size" = {
-          # Render the full effect size sub-form inline at this label's position
-          mod_effect_size_ui_ui(ns("effect_size_form"))
+          # Render an effect size sub-form for this group instance (or
+          # a single top-level form when inst_key is NULL)
+          es_id <- if (!is.null(inst_key)) paste0("es_", inst_key)
+                   else "effect_size_form"
+          mod_effect_size_ui_ui(ns(es_id))
         },
 
         # Fallback
@@ -771,7 +883,11 @@ mod_review_server <- function(id, project_id, session_rv) {
       req(nchar(gname) > 0)
       insts <- group_instances()
       if (is.null(insts[[gname]])) insts[[gname]] <- list()
-      insts[[gname]] <- c(insts[[gname]], list(.new_key()))
+      # Monotonic counter ensures unique deterministic keys even after removal
+      n <- (es_instance_counter[[gname]] %||% length(insts[[gname]])) + 1L
+      es_instance_counter[[gname]] <<- n
+      new_key <- paste0(gname, "_", n)
+      insts[[gname]] <- c(insts[[gname]], list(new_key))
       group_instances(insts)
     })
 
@@ -957,8 +1073,191 @@ mod_review_server <- function(id, project_id, session_rv) {
                             type = "warning")
       )
 
-      # Trigger effect size computation and save
-      es_save_trigger(es_save_trigger() + 1L)
+      # Compute and save effect sizes synchronously.
+      # Determine whether effect_size labels live inside a group (multi-instance)
+      # or are top-level (single instance).
+      es_groups <- .find_es_groups(project_labels())
+
+      # Helper: build es_body with explicit NA for nullable numeric fields
+      # so jsonlite sends JSON null instead of dropping the field entirely.
+      # Without this, PATCH operations silently retain stale r/z/var_z values.
+      .build_es_body <- function(aid, gi_id, es_inputs, computed) {
+        # Use NULL (not NA_real_) for missing numeric values.
+        # httr2::req_body_json passes null="null" to jsonlite, so NULL list
+        # elements become JSON null → SQL NULL.  NA_real_ would serialize
+        # as the string "NA", causing a PostgreSQL 22P02 error.
+        .null_if_missing <- function(x) {
+          if (!is.null(x) && length(x) == 1 && !is.na(x)) x else NULL
+        }
+        list(
+          article_id        = aid,
+          group_instance_id = gi_id,
+          raw_effect_json   = es_inputs,
+          r                 = .null_if_missing(computed$r),
+          z                 = .null_if_missing(computed$z),
+          var_z             = .null_if_missing(computed$var_z),
+          effect_status     = computed$effect_status %||% "insufficient_data",
+          effect_type       = computed$effect_type %||% "zero_order",
+          effect_warnings   = if (length(computed$effect_warnings) > 0)
+                                as.list(computed$effect_warnings)
+                              else list(),
+          computed_at       = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ",
+                                     tz = "UTC")
+        )
+      }
+
+      if (length(es_groups) > 0) {
+        # ---- Multi-instance mode: one ES per group instance ----
+        insts <- group_instances()
+
+        # Fetch existing effect_size rows so we can PATCH them in place
+        # instead of relying on DELETE + INSERT (which fails silently
+        # if the DELETE RLS policy is missing — sql/09).
+        existing_es_rows <- tryCatch({
+          sb_get("effect_sizes",
+                 filters = list(article_id = aid),
+                 select  = "effect_id,group_instance_id",
+                 token   = session_rv$token)
+        }, error = function(e) data.frame())
+
+        # Build a lookup: gi_id -> effect_id (keep latest per gi_id)
+        existing_eid <- list()
+        if (is.data.frame(existing_es_rows) && nrow(existing_es_rows) > 0) {
+          for (r_idx in seq_len(nrow(existing_es_rows))) {
+            gi <- existing_es_rows$group_instance_id[r_idx]
+            if (!is.na(gi)) existing_eid[[gi]] <- existing_es_rows$effect_id[r_idx]
+          }
+        }
+
+        # Track which gi_ids we've written so we can clean up orphans
+        saved_gi_ids <- character(0)
+
+        for (gname in es_groups) {
+          keys <- insts[[gname]]
+          if (is.null(keys) || length(keys) == 0) next
+          for (j in seq_along(keys)) {
+            key    <- keys[[j]]
+            mod_id <- paste0("es_", key)
+            entry  <- es_module_entries[[mod_id]]
+            if (is.null(entry)) {
+              message(sprintf("[do_save] Module entry not found for %s (instance %d)", mod_id, j))
+              next
+            }
+
+            es_inputs <- tryCatch(entry$module$collect_inputs(),
+                                  error = function(e) {
+                                    message("[do_save] collect_inputs error: ", e$message)
+                                    NULL
+                                  })
+            if (is.null(es_inputs)) {
+              message(sprintf("[do_save] No ES inputs for %s instance %d (study_design not set?)", gname, j))
+              showNotification(
+                sprintf("Effect size for %s instance %d was not saved (no study design selected).",
+                        gname, j),
+                type = "warning", duration = 8)
+              next
+            }
+
+            # Always use sequential gi_id matching what .select_article() reconstructs
+            gi_id <- paste0(gname, "_", j)
+            saved_gi_ids <- c(saved_gi_ids, gi_id)
+
+            computed <- tryCatch(
+              compute_effect_size(es_inputs),
+              error = function(e) {
+                message("[effect_size compute] error: ", e$message)
+                list(r = NULL, z = NULL, var_z = NULL,
+                     effect_status = "insufficient_data",
+                     effect_warnings = c(paste("Computation error:", e$message)))
+              }
+            )
+
+            tryCatch({
+              es_body <- .build_es_body(aid, gi_id, es_inputs, computed)
+
+              # PATCH if a row with this gi_id already exists, else INSERT
+              eid <- existing_eid[[gi_id]]
+              if (!is.null(eid)) {
+                sb_patch("effect_sizes", "effect_id", eid, es_body,
+                         token = session_rv$token)
+                message(sprintf("[do_save] ES patched for %s %s (inst %d): r=%s, z=%s, status=%s",
+                                aid, gname, j, computed$r, computed$z,
+                                computed$effect_status))
+              } else {
+                sb_post("effect_sizes", es_body, token = session_rv$token)
+                message(sprintf("[do_save] ES inserted for %s %s (inst %d): r=%s, z=%s, status=%s",
+                                aid, gname, j, computed$r, computed$z,
+                                computed$effect_status))
+              }
+            }, error = function(e) {
+              showNotification(paste("Effect size save failed:", e$message),
+                               type = "warning")
+              message("[effect_size save] error: ", e$message)
+            })
+
+            entry$module$result(computed)
+          }
+        }
+
+        # Clean up orphaned rows (gi_ids that no longer have instances).
+        # Uses DELETE which requires the RLS policy from sql/09.
+        orphan_gi_ids <- setdiff(names(existing_eid), saved_gi_ids)
+        for (orphan_gi in orphan_gi_ids) {
+          tryCatch({
+            sb_delete("effect_sizes", "effect_id", existing_eid[[orphan_gi]],
+                      token = session_rv$token)
+            message(sprintf("[do_save] Deleted orphan ES row: gi=%s, eid=%s",
+                            orphan_gi, existing_eid[[orphan_gi]]))
+          }, error = function(e) {
+            message("[do_save] Orphan delete failed (non-fatal): ", e$message)
+          })
+        }
+
+      } else {
+        # ---- Single-instance mode: top-level ES or no ES ----
+        es_inputs <- tryCatch(es_module$collect_inputs(), error = function(e) NULL)
+        if (!is.null(es_inputs)) {
+          computed <- tryCatch(
+            compute_effect_size(es_inputs),
+            error = function(e) {
+              message("[effect_size compute] error: ", e$message)
+              list(r = NULL, z = NULL, var_z = NULL,
+                   effect_status = "insufficient_data",
+                   effect_warnings = c(paste("Computation error:", e$message)))
+            }
+          )
+          tryCatch({
+            existing_es <- sb_get("effect_sizes",
+              filters = list(article_id = aid),
+              select  = "effect_id",
+              token   = session_rv$token)
+
+            es_body <- .build_es_body(aid, NULL, es_inputs, computed)
+
+            if (is.data.frame(existing_es) && nrow(existing_es) > 0) {
+              sb_patch("effect_sizes", "effect_id",
+                       existing_es$effect_id[1], es_body,
+                       token = session_rv$token)
+            } else {
+              sb_post("effect_sizes", es_body, token = session_rv$token)
+            }
+            message(sprintf("[do_save] Effect size saved for %s: r=%s, z=%s, var_z=%s, status=%s",
+                            aid, computed$r, computed$z, computed$var_z,
+                            computed$effect_status))
+          }, error = function(e) {
+            showNotification(paste("Effect size save failed:", e$message),
+                             type = "warning")
+            message("[effect_size save] error: ", e$message)
+          })
+          es_module$result(computed)
+        } else {
+          es_module$result(NULL)
+          message("[do_save] No effect size inputs collected (study_design not set)")
+          showNotification(
+            "Effect size was not saved (no study design selected).",
+            type = "warning", duration = 6)
+        }
+      }
 
       # Audit log
       .write_audit(aid, "save", old_json = old_meta, new_json = vals)
