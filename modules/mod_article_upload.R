@@ -33,11 +33,12 @@ mod_article_upload_ui <- function(id) {
                   tags$tr(tags$th("Column"), tags$th("Required"), tags$th("Notes"))
                 ),
                 tags$tbody(
-                  tags$tr(tags$td(tags$code("title")),    tags$td("Yes"), tags$td("Article title text")),
-                  tags$tr(tags$td(tags$code("abstract")), tags$td("Yes"), tags$td("Full abstract text")),
-                  tags$tr(tags$td(tags$code("author")),   tags$td("Yes"), tags$td("Author string (any format)")),
-                  tags$tr(tags$td(tags$code("year")),     tags$td("Yes"), tags$td("Publication year (integer)")),
-                  tags$tr(tags$td(tags$code("doi")),      tags$td("Yes"), tags$td("DOI (with or without https://doi.org/ prefix)"))
+                  tags$tr(tags$td(tags$code("title")),       tags$td("Yes"), tags$td("Article title text")),
+                  tags$tr(tags$td(tags$code("abstract")),    tags$td("Yes"), tags$td("Full abstract text")),
+                  tags$tr(tags$td(tags$code("author")),      tags$td("Yes"), tags$td("Author string (any format)")),
+                  tags$tr(tags$td(tags$code("year")),        tags$td("Yes"), tags$td("Publication year (integer)")),
+                  tags$tr(tags$td(tags$code("doi")),         tags$td("Yes"), tags$td("DOI (with or without https://doi.org/ prefix)")),
+                  tags$tr(tags$td(tags$code("article_num")), tags$td("No"),  tags$td("Integer ID for this article. When supplied, Drive PDFs named [article_num].pdf will be linked automatically. If omitted, a sequential number is assigned."))
                 )
               ),
               p(class = "text-muted small mb-0",
@@ -91,22 +92,36 @@ mod_article_upload_server <- function(id, project_id, session_rv,
     # Reset to FALSE when the user selects a new file.
     batch_just_uploaded <- reactiveVal(FALSE)
 
+    # ---- Reset the upload gate when user picks a new file ----
+    # This MUST be an observer (eager) rather than a side-effect inside
+    # parse_result() (lazy). parse_result() is only read by renderUI
+    # outputs, and those check batch_just_uploaded() first — if it's TRUE
+    # they return early without reading parse_result(), so the reactive
+    # never runs and batch_just_uploaded(FALSE) never executes. Classic
+    # Shiny reactive deadlock.
+    observeEvent(input$csv_file, {
+      batch_just_uploaded(FALSE)
+      message("[upload] New file selected — batch_just_uploaded reset to FALSE")
+    })
+
     # ---- Parse result reactive ---------------------------
     parse_result <- reactive({
       req(input$csv_file)
-      # Reset the upload gate when user picks a new file
-      batch_just_uploaded(FALSE)
       req(project_id(), session_rv$token)
       path <- input$csv_file$datapath
       fname_orig <- input$csv_file$name
+      message("[upload] parse_result: parsing '", fname_orig, "'")
       tryCatch({
         df   <- read_upload_file(path, filename = fname_orig)
         miss <- validate_upload_columns(df)
         if (length(miss) > 0) {
           stop(paste("Missing required column(s):", paste(miss, collapse = ", ")))
         }
+        message("[upload] parse_result: OK — ", nrow(df), " rows, cols: ",
+                paste(names(df), collapse = ", "))
         list(ok = TRUE, df = df, error = NULL)
       }, error = function(e) {
+        message("[upload] parse_result: ERROR — ", e$message)
         list(ok = FALSE, df = NULL, error = e$message)
       })
     })
@@ -241,9 +256,15 @@ mod_article_upload_server <- function(id, project_id, session_rv,
             icon("info-circle"),
             sprintf(" %d flagged row%s sent to Upload History.",
                     n_dup, if (n_dup == 1) "" else "s")),
-        actionButton(ns("btn_upload"), btn_lbl,
-                     class = "btn btn-primary btn-lg w-100",
-                     icon  = icon("cloud-upload-alt"))
+        # Use tags$button + Shiny.setInputValue instead of actionButton
+        # so the observer always fires even after renderUI re-creates the button.
+        tags$button(
+          class   = "btn btn-primary btn-lg w-100",
+          onclick = sprintf(
+            'Shiny.setInputValue("%s", Date.now(), {priority:"event"});',
+            ns("do_upload")),
+          icon("cloud-upload-alt"), " ", btn_lbl
+        )
       )
     })
 
@@ -257,8 +278,10 @@ mod_article_upload_server <- function(id, project_id, session_rv,
       df$status <- ifelse(
         seq_len(nrow(df)) %in% dups$row_index, "\u26a0 Flagged", "\u2713 Clean"
       )
-      df_show <- head(df[, c("title", "author", "year", "status")], 10)
-      names(df_show) <- c("Title", "Author", "Year", "Status")
+      has_anum <- "article_num" %in% names(df)
+      cols     <- if (has_anum) c("article_num", "title", "author", "year", "status") else c("title", "author", "year", "status")
+      df_show  <- head(df[, cols], 10)
+      names(df_show) <- if (has_anum) c("#", "Title", "Author", "Year", "Status") else c("Title", "Author", "Year", "Status")
       df_show$Title <- str_trunc(df_show$Title, 45)
       div(class = "card",
         div(class = "card-header fw-semibold",
@@ -270,13 +293,18 @@ mod_article_upload_server <- function(id, project_id, session_rv,
     })
 
     # ---- Upload handler ----------------------------------
-    # (upload_done is declared above existing_articles — do not re-declare here)
-    observeEvent(input$btn_upload, {
+    # Uses input$do_upload (set via Shiny.setInputValue in the onclick
+    # of the upload button) instead of an actionButton counter.
+    # This avoids the known Shiny issue where an actionButton inside
+    # renderUI loses its click tracking after destroy/re-create cycles.
+    observeEvent(input$do_upload, {
+      message("[upload] === UPLOAD BUTTON CLICKED ===")
       pr  <- parse_result()
       req(pr$ok)
       pid   <- project_id()
       token <- session_rv$token
       req(pid, token)
+      message("[upload] project_id=", pid, "  token_len=", nchar(token))
 
       dups    <- dup_result()
       df      <- pr$df
@@ -287,6 +315,7 @@ mod_article_upload_server <- function(id, project_id, session_rv,
 
       tryCatch({
         # 1. Create upload batch record
+        message("[upload] Creating batch: n_clean=", n_clean, " n_dup=", n_dup)
         batch    <- sb_post("uploads",
           list(project_id    = pid,
                filename      = fname,
@@ -294,49 +323,111 @@ mod_article_upload_server <- function(id, project_id, session_rv,
                rows_flagged  = n_dup),
           token = token)
         batch_id <- batch$upload_batch_id
+        message("[upload] Batch created: batch_id=", batch_id)
 
-        # 2. Insert clean articles
-        clean_idx <- setdiff(seq_len(n_total), dups$row_index)
+        # Guard: batch_id must be a non-empty string. If sb_post returned an
+        # unexpected format (e.g. empty list due to a silent RLS failure on
+        # the uploads table), surface the problem immediately rather than
+        # proceeding with NULL batch_id.
+        if (is.null(batch_id) || length(batch_id) == 0 ||
+            nchar(as.character(batch_id[1])) == 0) {
+          stop(paste(
+            "Upload batch was not created (batch_id is empty).",
+            "Check that sql/05_duplicate_flags.sql has been applied and that",
+            "the uploads INSERT RLS policy is active (sql/02_rls_policies.sql)."
+          ))
+        }
+
+        # 2. Insert clean articles — collect errors per row so one bad row
+        #    does not abort the entire batch.
+        clean_idx    <- setdiff(seq_len(n_total), dups$row_index)
+        n_inserted   <- 0L
+        row_errors   <- character(0)
+
         for (i in clean_idx) {
           row <- df[i, ]
-          sb_post("articles",
-            list(project_id      = pid,
-                 title           = as.character(row$title    %||% ""),
-                 abstract        = as.character(row$abstract %||% ""),
-                 author          = as.character(row$author   %||% ""),
-                 year            = if (!is.na(row$year)) as.integer(row$year) else NULL,
-                 doi_clean       = clean_doi_dup(as.character(row$doi %||% "")),
-                 upload_batch_id = batch_id,
-                 review_status   = "unreviewed"),
-            token = token)
+          anum_val <- if ("article_num" %in% names(row)) {
+            v <- suppressWarnings(as.integer(row$article_num))
+            if (!is.na(v)) v else NULL
+          } else NULL
+          art_payload <- list(
+            project_id      = pid,
+            title           = as.character(row$title    %||% ""),
+            abstract        = as.character(row$abstract %||% ""),
+            author          = as.character(row$author   %||% ""),
+            year            = if (!is.na(row$year)) as.integer(row$year) else NULL,
+            doi_clean       = clean_doi_dup(as.character(row$doi %||% "")),
+            upload_batch_id = batch_id,
+            review_status   = "unreviewed"
+          )
+          if (!is.null(anum_val)) art_payload$article_num <- anum_val
+
+          result <- tryCatch(
+            { sb_post("articles", art_payload, token = token); TRUE },
+            error = function(e) e$message
+          )
+          if (isTRUE(result)) {
+            n_inserted <- n_inserted + 1L
+            message("[upload]   Row ", i, " inserted OK")
+          } else {
+            message("[upload]   Row ", i, " FAILED: ", result)
+            row_errors <- c(row_errors,
+              sprintf("Row %d ('%s'): %s",
+                      i, str_trunc(as.character(row$title %||% ""), 40), result))
+          }
         }
 
         # 3. Insert flagged rows into duplicate_flags
+        n_flagged_ok <- 0L
         for (j in seq_len(nrow(dups))) {
           fr  <- dups[j, ]
           or  <- df[fr$row_index, ]
-          art <- jsonlite::toJSON(list(
+          anum_flag <- if ("article_num" %in% names(or)) {
+            v <- suppressWarnings(as.integer(or$article_num))
+            if (!is.na(v)) v else NULL
+          } else NULL
+          art_list <- list(
             title     = as.character(or$title    %||% ""),
             abstract  = as.character(or$abstract %||% ""),
             author    = as.character(or$author   %||% ""),
             year      = if (!is.na(or$year)) as.integer(or$year) else NULL,
             doi_clean = clean_doi_dup(as.character(or$doi %||% ""))
-          ), auto_unbox = TRUE)
-          sb_post("duplicate_flags",
-            list(upload_batch_id    = batch_id,
-                 project_id         = pid,
-                 article_data       = art,
-                 matched_article_id = fr$matched_article_id,
-                 match_type         = fr$match_type,
-                 similarity_score   = if (!is.na(fr$similarity_score)) fr$similarity_score else NULL,
-                 status             = "pending"),
-            token = token)
+          )
+          if (!is.null(anum_flag)) art_list$article_num <- anum_flag
+          art <- jsonlite::toJSON(art_list, auto_unbox = TRUE)
+          tryCatch({
+            sb_post("duplicate_flags",
+              list(upload_batch_id    = batch_id,
+                   project_id         = pid,
+                   article_data       = art,
+                   matched_article_id = fr$matched_article_id,
+                   match_type         = fr$match_type,
+                   similarity_score   = if (!is.na(fr$similarity_score)) fr$similarity_score else NULL,
+                   status             = "pending"),
+              token = token)
+            n_flagged_ok <- n_flagged_ok + 1L
+          }, error = function(e) {
+            row_errors <<- c(row_errors,
+              sprintf("Flag row %d: %s", fr$row_index, e$message))
+          })
         }
 
-        showNotification(
-          sprintf("Upload complete: %d article%s inserted, %d flagged for review.",
-                  n_clean, if (n_clean == 1) "" else "s", n_dup),
-          type = "message", duration = 8)
+        # 4. Report result
+        if (length(row_errors) == 0) {
+          showNotification(
+            sprintf("Upload complete: %d article%s inserted, %d flagged for review.",
+                    n_inserted, if (n_inserted == 1) "" else "s", n_flagged_ok),
+            type = "message", duration = 8)
+        } else {
+          showNotification(
+            sprintf(
+              "Partial upload: %d inserted, %d flagged, %d row error%s. Check the R console for details.",
+              n_inserted, n_flagged_ok, length(row_errors),
+              if (length(row_errors) == 1) "" else "s"),
+            type = "warning", duration = 12)
+          message("[upload] Row-level errors:\n",
+                  paste(row_errors, collapse = "\n"))
+        }
 
         # Mark upload as done: this hides the stale preview/button
         # BEFORE upload_done triggers existing_articles re-fetch
@@ -348,6 +439,7 @@ mod_article_upload_server <- function(id, project_id, session_rv,
       }, error = function(e) {
         showNotification(paste("Upload failed:", e$message),
                          type = "error", duration = 10)
+        message("[upload] Fatal error: ", e$message)
       })
     })
 

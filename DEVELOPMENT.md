@@ -188,6 +188,9 @@ Upload 20 articles. Upload second CSV with 2 exact DOI duplicates, 1 title-year 
 - Reject decision: sets `duplicate_flags.status = 'rejected'` (no article inserted).
 - `shinyjs::reset("csv_file")` clears the file input after a successful upload so the user can upload a second batch immediately.
 - Upload batch record (`uploads` table) is created before article inserts; `rows_uploaded` = clean rows, `rows_flagged` = flagged rows.
+- **Optional `article_num` column:** CSV/TXT files may include an `article_num` integer column to supply the article number explicitly. When present, the value overrides the auto-sequence and is stored directly in the `article_num BIGINT` column on `articles`. This allows users to pre-assign numbers that match their Drive PDF filenames (`[article_num].pdf`) so Google Drive sync works immediately after upload. If the column is absent, `article_num` is assigned automatically by the DB sequence as before. The preview table shows a `#` column when `article_num` is detected. Non-integer values are silently ignored (NULL/sequence falls back). The `article_num` value is also preserved in `duplicate_flags.article_data` JSONB and restored when a flagged row is accepted. Test file: `tests/test_data/gate5_with_article_num.txt`.
+- **Sequence grant:** `sql/07_gdrive_columns.sql` creates `articles_article_num_seq` but does not grant `USAGE` to `authenticated`. Run `sql/11_sequence_grants.sql` once to fix this — required for uploads that do not supply an explicit `article_num` column (the DEFAULT calls `nextval()` which needs the grant).
+- **Robust upload error handling:** The upload handler now validates `batch_id` is non-null before entering the article loop. Per-row errors are collected individually (one bad row no longer aborts the whole batch). A "Partial upload" warning notification is shown when any rows fail, and the per-row error details are written to the R console (`message()`). Fatal batch-creation errors show the exact API error message.
 
 **Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
@@ -206,7 +209,7 @@ Upload 20 articles. Upload second CSV with 2 exact DOI duplicates, 1 title-year 
 **Validation Gate 6:**
 Create public Drive folder. Add 3 valid PDFs + 1 invalid name. Paste URL, click Sync. Verify pdf_drive_link populated for 3 articles, 1 skipped in summary.
 
-**Pre-flight — run `sql/07_gdrive_columns.sql` in Supabase SQL Editor before testing Gate 6.**
+**Pre-flight — run `sql/07_gdrive_columns.sql` and `sql/11_sequence_grants.sql` in Supabase SQL Editor before testing Gate 6.**
 
 **Implementation notes:**
 - `R/gdrive.R` implements four functions: `gdrive_init_oauth()` (one-time interactive auth), `gdrive_init()` (load cached token at startup), `gdrive_list_pdfs()` (Drive API v3 via `httr2`), `sync_drive_folder()` (match + upsert loop).
