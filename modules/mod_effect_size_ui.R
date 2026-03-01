@@ -466,7 +466,11 @@ mod_effect_size_ui_ui <- function(id) {
 
 mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
                                        project_id_reactive,
-                                       on_save_trigger) {
+                                       on_save_trigger = NULL,
+                                       group_instance_id = NULL) {
+  # Force evaluation of group_instance_id NOW so that each module instance
+  # created inside a for-loop captures its own value (R lazy evaluation fix).
+  force(group_instance_id)
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
@@ -478,82 +482,154 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
       aid <- article_id_reactive()
       es_result(NULL)   # clear previous result
       if (is.null(aid)) return()
+
+      # ALWAYS reset all fields first to prevent stale data from the
+      # previous article leaking through.  Fields are then populated from
+      # the DB below (after the usual rendering delays).
+      .reset_all_fields()
+
       tryCatch({
+        # Build filters: always filter by article_id, and by group_instance_id
+        # if this form belongs to a specific group instance
+        es_filters <- list(article_id = aid)
+        if (!is.null(group_instance_id)) {
+          es_filters$group_instance_id <- group_instance_id
+        }
         rows <- sb_get("effect_sizes",
-          filters = list(article_id = aid),
+          filters = es_filters,
           token   = session_rv$token)
+
+        # --- Positional fallback for articles saved with counter-based gi_ids ---
+        # If no rows match the sequential gi_id (e.g., "study_site_1") but the
+        # article HAS effect sizes under different gi_ids (e.g., "study_site_3"),
+        # fall back to positional matching.
+        if ((!is.data.frame(rows) || nrow(rows) == 0) && !is.null(group_instance_id)) {
+          pos <- suppressWarnings(
+            as.integer(sub(".*_(\\d+)$", "\\1", group_instance_id)))
+          if (!is.na(pos)) {
+            all_rows <- sb_get("effect_sizes",
+              filters = list(article_id = aid),
+              token   = session_rv$token)
+            if (is.data.frame(all_rows) && nrow(all_rows) > 0) {
+              # Deduplicate: keep latest per gi_id
+              if ("computed_at" %in% names(all_rows)) {
+                ord  <- order(as.POSIXct(all_rows$computed_at, tz = "UTC"),
+                              decreasing = TRUE)
+                all_rows <- all_rows[ord, , drop = FALSE]
+                all_rows <- all_rows[!duplicated(all_rows$group_instance_id),
+                                     , drop = FALSE]
+              }
+              # Sort gi_ids numerically by trailing number
+              gi_nums <- suppressWarnings(
+                as.integer(sub(".*_(\\d+)$", "\\1",
+                               all_rows$group_instance_id)))
+              gi_nums[is.na(gi_nums)] <- 0L
+              all_rows <- all_rows[order(gi_nums), , drop = FALSE]
+              if (pos <= nrow(all_rows)) {
+                rows <- all_rows[pos, , drop = FALSE]
+                message(sprintf(
+                  "[mod_effect_size_ui] Fallback: loaded position %d for %s (article %s)",
+                  pos, group_instance_id, aid))
+              }
+            }
+          }
+        }
+
         if (is.data.frame(rows) && nrow(rows) > 0) {
-          row <- rows[1, ]   # first effect size for this article
+          # If multiple rows (stale data), pick the latest by computed_at
+          if (nrow(rows) > 1 && "computed_at" %in% names(rows)) {
+            ct <- as.POSIXct(rows$computed_at, tz = "UTC")
+            rows <- rows[order(ct, decreasing = TRUE), , drop = FALSE]
+          }
+          row <- rows[1, ]   # latest matching effect size row
           raw <- tryCatch({
-            if (is.character(row$raw_effect_json))
-              jsonlite::fromJSON(row$raw_effect_json, simplifyVector = FALSE)
-            else if (is.list(row$raw_effect_json))
-              row$raw_effect_json
+            rj <- row$raw_effect_json
+            # Unwrap list-column wrapper from single-row data frame access
+            if (is.list(rj) && length(rj) == 1 &&
+                (is.null(names(rj)) || identical(names(rj), ""))) {
+              rj <- rj[[1]]
+            }
+            if (is.character(rj) && length(rj) == 1 && nchar(rj) > 0)
+              jsonlite::fromJSON(rj, simplifyVector = FALSE)
+            else if (is.list(rj))
+              rj
             else
               list()
-          }, error = function(e) list())
-
-          # Populate general fields
-          .update_input_safe("study_method",             raw$study_method)
-          .update_input_safe("response_scale",           raw$response_scale)
-          .update_input_safe("response_distribution",    raw$response_distribution)
-          .update_input_safe("response_variable_name",   raw$response_variable_name)
-          .update_input_safe("response_unit",            raw$response_unit)
-          .update_input_safe("predictor_distribution",   raw$predictor_distribution)
-          .update_input_safe("predictor_variable_name",  raw$predictor_variable_name)
-          .update_input_safe("predictor_unit",           raw$predictor_unit)
-          .update_input_safe("interaction_effect",       raw$interaction_effect)
-          .update_input_safe("study_design",             raw$study_design)
-
-          # Populate design-specific fields after a short delay
-          # so the conditional panel has time to render
-          shinyjs::delay(300, {
-            design <- raw$study_design %||% ""
-            .restore_design_fields(raw, "")
-
-            # Interaction fields
-            if (design == "interaction") {
-              .update_input_safe("interaction_pathway",  raw$interaction_pathway)
-              shinyjs::delay(200, {
-                pathway <- raw$interaction_pathway %||% "A"
-                if (pathway == "A") {
-                  .restore_interaction_a(raw, "")
-                } else {
-                  # Pathway B: group A and group B
-                  .update_input_safe("grpA_study_design", raw$group_a$study_design)
-                  .update_input_safe("grpB_study_design", raw$group_b$study_design)
-                  shinyjs::delay(200, {
-                    if (!is.null(raw$group_a))
-                      .restore_design_fields(raw$group_a, "grpA_")
-                    if (!is.null(raw$group_b))
-                      .restore_design_fields(raw$group_b, "grpB_")
-                  })
-                }
-              })
-            }
+          }, error = function(e) {
+            message("[mod_effect_size_ui] raw_effect_json parse error: ", e$message)
+            list()
           })
 
-          # Show stored result
+          # Show stored result immediately (doesn't need UI inputs)
+          etype <- tryCatch(row$effect_type, error = function(e) NULL)
+          ewarn <- tryCatch(row$effect_warnings, error = function(e) NULL)
           es_result(list(
             r               = row$r,
             z               = row$z,
             var_z           = row$var_z,
             effect_status   = row$effect_status,
-            effect_type     = if (!is.null(row$effect_type)) row$effect_type
-                              else "zero_order",
-            effect_warnings = if (is.character(row$effect_warnings))
-                                row$effect_warnings
-                              else if (is.list(row$effect_warnings))
-                                unlist(row$effect_warnings)
+            effect_type     = if (!is.null(etype)) etype else "zero_order",
+            effect_warnings = if (is.character(ewarn))
+                                ewarn
+                              else if (is.list(ewarn))
+                                unlist(ewarn)
                               else character(0)
           ))
-        } else {
-          # No existing effect size — reset all fields
-          .reset_all_fields()
+
+          # --- Phase 1: General fields ---
+          # Delay to ensure the module UI (including nested renderUI
+          # outputs like study_design_panel) has been flushed to the
+          # client. Dynamically-created grouped modules need extra time
+          # because their parent renderUI hasn't sent the HTML yet.
+          shinyjs::delay(600, {
+            .update_input_safe("study_method",             raw$study_method)
+            .update_input_safe("response_scale",           raw$response_scale)
+            .update_input_safe("response_distribution",    raw$response_distribution)
+            .update_input_safe("response_variable_name",   raw$response_variable_name)
+            .update_input_safe("response_unit",            raw$response_unit)
+            .update_input_safe("predictor_distribution",   raw$predictor_distribution)
+            .update_input_safe("predictor_variable_name",  raw$predictor_variable_name)
+            .update_input_safe("predictor_unit",           raw$predictor_unit)
+            .update_input_safe("interaction_effect",       raw$interaction_effect)
+            .update_input_safe("study_design",             raw$study_design)
+
+            # --- Phase 2: Design-specific fields ---
+            # After study_design is set, the design_fields renderUI must
+            # fire + flush + render in the browser before field inputs exist.
+            # This requires a server→client→server→client round-trip.
+            shinyjs::delay(900, {
+              design <- raw$study_design %||% ""
+              .restore_design_fields(raw, "")
+
+              # --- Phase 3: Interaction pathway fields ---
+              if (design == "interaction") {
+                .update_input_safe("interaction_pathway",  raw$interaction_pathway)
+                shinyjs::delay(700, {
+                  pathway <- raw$interaction_pathway %||% "A"
+                  if (pathway == "A") {
+                    .restore_interaction_a(raw, "")
+                  } else {
+                    # Pathway B: group A and group B sub-design selectors
+                    .update_input_safe("grpA_study_design", raw$group_a$study_design)
+                    .update_input_safe("grpB_study_design", raw$group_b$study_design)
+                    # --- Phase 4: Pathway B sub-design fields ---
+                    shinyjs::delay(700, {
+                      if (!is.null(raw$group_a))
+                        .restore_design_fields(raw$group_a, "grpA_")
+                      if (!is.null(raw$group_b))
+                        .restore_design_fields(raw$group_b, "grpB_")
+                    })
+                  }
+                })
+              }
+            })
+          })
+
         }
+        # else: fields already reset above; nothing more to do
       }, error = function(e) {
         message("[mod_effect_size_ui] load error: ", e$message)
-        .reset_all_fields()
+        # Fields already reset above; no additional reset needed
       })
     }, ignoreNULL = FALSE)
 
@@ -644,8 +720,55 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
         updateSelectInput(session, "study_design", selected = "")
       })
       for (fld in c("response_variable_name", "response_unit",
-                     "predictor_variable_name", "predictor_unit")) {
+                     "predictor_variable_name", "predictor_unit",
+                     "control_description", "treatment_description")) {
         updateTextInput(session, fld, value = "")
+      }
+      # Reset ALL numeric / statistics fields across all study designs
+      # These live inside conditional renderUI panels that may or may not
+      # exist in the DOM yet, so updateNumericInput silently no-ops
+      # for inputs that don't exist.
+      for (fld in c(
+        # Control/Treatment
+        "mean_control", "mean_treatment",
+        "var_value_control", "var_value_treatment",
+        "n_control", "n_treatment",
+        # Shared stats
+        "t_stat", "F_stat", "chi_square_stat", "p_value", "df",
+        # Correlation
+        "r_reported", "se_r", "n", "covariance_XY", "sd_X", "sd_Y",
+        # Regression
+        "beta", "se_beta", "n_predictors",
+        # Interaction
+        "interaction_term", "se_interaction",
+        # Pathway B sub-forms
+        "grpA_mean_control", "grpA_mean_treatment",
+        "grpA_var_value_control", "grpA_var_value_treatment",
+        "grpA_n_control", "grpA_n_treatment",
+        "grpA_t_stat", "grpA_F_stat", "grpA_df",
+        "grpA_r_reported", "grpA_se_r", "grpA_n",
+        "grpA_beta", "grpA_se_beta",
+        "grpB_mean_control", "grpB_mean_treatment",
+        "grpB_var_value_control", "grpB_var_value_treatment",
+        "grpB_n_control", "grpB_n_treatment",
+        "grpB_t_stat", "grpB_F_stat", "grpB_df",
+        "grpB_r_reported", "grpB_se_r", "grpB_n",
+        "grpB_beta", "grpB_se_beta"
+      )) {
+        updateNumericInput(session, fld, value = NA_real_)
+      }
+      # Reset select inputs inside design panels
+      for (fld in c("var_statistic_type", "beta_type",
+                     "interaction_pathway",
+                     "grpA_study_design", "grpB_study_design",
+                     "grpA_var_statistic_type", "grpA_beta_type",
+                     "grpB_var_statistic_type", "grpB_beta_type")) {
+        updateSelectInput(session, fld, selected = "")
+      }
+      # Reset checkboxes inside design panels
+      for (fld in c("use_small_sd_approx", "multiple_predictors",
+                     "grpA_use_small_sd_approx", "grpB_use_small_sd_approx")) {
+        updateCheckboxInput(session, fld, value = FALSE)
       }
       es_result(NULL)
     }
@@ -796,6 +919,10 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
         NULL
       )
     })
+
+    # Ensure Group B sub-form renders even when its tab is inactive,
+    # so that field inputs exist when restoring saved data.
+    outputOptions(output, "grpB_fields", suspendWhenHidden = FALSE)
 
     # ---- Small SD toggle (for control/treatment) ----
     # Shows only when means are present but no variability/test stats
@@ -1041,9 +1168,67 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
     # ---- Field collectors per design ----
     .safe_num <- function(val) {
       if (is.null(val)) return(NULL)
+      if (is.character(val) && nchar(trimws(val)) == 0) return(NULL)
       v <- suppressWarnings(as.numeric(val))
       if (is.na(v)) return(NULL)
       v
+    }
+
+    # Check all visible numeric input fields for non-numeric text.
+    # Returns a character vector of warning messages (empty if all OK).
+    .validate_numeric_inputs <- function() {
+      bad <- character(0)
+      .check <- function(input_id, label) {
+        v <- input[[input_id]]
+        if (!is.null(v) && is.character(v) && nchar(trimws(v)) > 0) {
+          if (is.na(suppressWarnings(as.numeric(v)))) {
+            bad <<- c(bad, sprintf("'%s' is not a valid number for %s", v, label))
+          }
+        }
+      }
+      design <- input$study_design %||% ""
+      is_interaction <- isTRUE(input$interaction_effect) || design == "interaction"
+      if (is_interaction) {
+        pathway <- input$interaction_pathway %||% "A"
+        if (pathway == "A") {
+          .check("interaction_term", "Interaction term")
+          .check("se_interaction",   "SE (interaction)")
+          .check("t_stat",           "t-statistic")
+          .check("df",               "df")
+          .check("n",                "n")
+        }
+        # Pathway B sub-forms use prefixed IDs; check those too
+        if (pathway == "B") {
+          for (pfx in c("grpA_", "grpB_")) {
+            for (fld in c("t_stat", "df", "n", "mean_control", "mean_treatment",
+                          "var_value_control", "var_value_treatment",
+                          "n_control", "n_treatment", "F_stat",
+                          "chi_square_stat", "p_value",
+                          "r_reported", "se_r", "beta", "se_beta",
+                          "sd_X", "sd_Y", "n_predictors")) {
+              .check(paste0(pfx, fld), paste0(pfx, fld))
+            }
+          }
+        }
+      } else if (design == "control_treatment") {
+        for (fld in c("mean_control", "mean_treatment",
+                      "var_value_control", "var_value_treatment",
+                      "n_control", "n_treatment", "t_stat", "F_stat",
+                      "chi_square_stat", "p_value", "df")) {
+          .check(fld, fld)
+        }
+      } else if (design == "correlation") {
+        for (fld in c("r_reported", "se_r", "n", "covariance_XY",
+                      "sd_X", "sd_Y", "t_stat", "df")) {
+          .check(fld, fld)
+        }
+      } else if (design %in% c("regression", "time_trend")) {
+        for (fld in c("beta", "se_beta", "n", "t_stat", "p_value",
+                      "df", "sd_X", "sd_Y", "n_predictors")) {
+          .check(fld, fld)
+        }
+      }
+      bad
     }
 
     .collect_ct_fields <- function(prefix) {
@@ -1097,6 +1282,16 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
 
     # ---- Calculate button: compute only (no DB write) ----
     observeEvent(input$btn_calculate, {
+      # Validate numeric fields before collecting inputs
+      bad_fields <- .validate_numeric_inputs()
+      if (length(bad_fields) > 0) {
+        showNotification(
+          paste("Please fix non-numeric values:",
+                paste(bad_fields, collapse = "; ")),
+          type = "error", duration = 8)
+        return()
+      }
+
       es_inputs <- collect_es_inputs()
       if (is.null(es_inputs)) {
         showNotification("Please select a study design first.",
@@ -1119,72 +1314,10 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
                        type = "message", duration = 3)
     }, ignoreInit = TRUE)
 
-    # ---- On save trigger: compute effect size and upsert ----
-    observeEvent(on_save_trigger(), {
-      aid <- article_id_reactive()
-      if (is.null(aid)) return()
-
-      es_inputs <- collect_es_inputs()
-      if (is.null(es_inputs)) {
-        es_result(NULL)
-        return()
-      }
-
-      # Run computation
-      computed <- tryCatch(
-        compute_effect_size(es_inputs),
-        error = function(e) {
-          message("[effect_size compute] error: ", e$message)
-          list(r = NULL, z = NULL, var_z = NULL,
-               effect_status = "insufficient_data",
-               effect_warnings = c(paste("Computation error:", e$message)))
-        }
-      )
-
-      # Build the raw JSON to store
-      raw_json <- jsonlite::toJSON(es_inputs, auto_unbox = TRUE, null = "null")
-
-      # Upsert to effect_sizes table
-      tryCatch({
-        # Check if an existing row exists for this article
-        existing <- sb_get("effect_sizes",
-          filters = list(article_id = aid),
-          select  = "effect_id",
-          token   = session_rv$token)
-
-        body <- list(
-          article_id       = aid,
-          raw_effect_json  = raw_json,
-          r                = computed$r,
-          z                = computed$z,
-          var_z            = computed$var_z,
-          effect_status    = computed$effect_status %||% "insufficient_data",
-          effect_type      = computed$effect_type %||% "zero_order",
-          effect_warnings  = if (length(computed$effect_warnings) > 0)
-                               as.list(computed$effect_warnings)
-                             else list(),
-          computed_at      = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
-        )
-
-        if (is.data.frame(existing) && nrow(existing) > 0) {
-          # Update existing
-          sb_patch("effect_sizes", "effect_id",
-                   existing$effect_id[1], body,
-                   token = session_rv$token)
-        } else {
-          # Insert new
-          sb_post("effect_sizes", body, token = session_rv$token)
-        }
-      }, error = function(e) {
-        showNotification(paste("Effect size save failed:", e$message),
-                         type = "warning")
-        message("[effect_size save] error: ", e$message)
-      })
-
-      # Update result display
-      es_result(computed)
-
-    }, ignoreInit = TRUE)
+    # NOTE: the actual save-to-DB logic is now in mod_review.R .do_save()
+    # (called synchronously before .go_next()) to avoid a race condition
+    # where the async observer would fire after the article_id had already
+    # changed to the next article.
 
     # ---- Return reactive: collected inputs (for the parent module) ----
     return(list(

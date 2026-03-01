@@ -258,3 +258,52 @@ test_that("unnest_labels skips effect_size variable_type labels", {
   expect_true("country" %in% names(result))
   expect_false("es_field" %in% names(result))
 })
+
+# ==== Tests: effect deduplication helper (internal to build_full_export) ====
+
+test_that("stale effect rows are deduplicated by computed_at", {
+
+  # Simulate an effects data frame with stale rows (same article + group_instance_id,
+  # different computed_at timestamps)
+  effects <- data.frame(
+    effect_id         = c("old1", "old2", "latest1", "old3", "latest2"),
+    article_id        = c("a1",   "a1",   "a1",      "a1",   "a1"),
+    group_instance_id = c("study_site_1", "study_site_1", "study_site_1",
+                          "study_site_2", "study_site_2"),
+    r                 = c(0.3, 0.4, 0.5, 0.6, 0.7),
+    z                 = c(0.31, 0.42, 0.55, 0.69, 0.87),
+    var_z             = c(NA, NA, 0.05, NA, 0.04),
+    effect_status     = c("calculated", "calculated", "calculated",
+                          "calculated", "calculated"),
+    computed_at       = c("2026-02-20T10:00:00Z", "2026-02-21T10:00:00Z",
+                          "2026-02-22T10:00:00Z", "2026-02-23T10:00:00Z",
+                          "2026-02-24T10:00:00Z"),
+    stringsAsFactors  = FALSE
+  )
+
+  # Run the deduplication logic (extracted from build_full_export)
+  effects$computed_at_ts <- as.POSIXct(effects$computed_at, tz = "UTC")
+  gi <- effects$group_instance_id
+  gi[is.na(gi)] <- "__no_group__"
+  effects$.dedup_key <- paste0(effects$article_id, "|||", gi)
+  keep <- logical(nrow(effects))
+  for (dk in unique(effects$.dedup_key)) {
+    idx <- which(effects$.dedup_key == dk)
+    if (length(idx) == 1L) {
+      keep[idx] <- TRUE
+    } else {
+      ts <- effects$computed_at_ts[idx]
+      best <- idx[which.max(ts)]
+      keep[best] <- TRUE
+    }
+  }
+  deduped <- effects[keep, , drop = FALSE]
+  deduped$computed_at_ts <- NULL
+  deduped$.dedup_key    <- NULL
+
+  # Should keep only 2 rows: the latest per group_instance_id
+  expect_equal(nrow(deduped), 2)
+  expect_equal(sort(deduped$effect_id), c("latest1", "latest2"))
+  expect_equal(deduped$r[deduped$group_instance_id == "study_site_1"], 0.5)
+  expect_equal(deduped$r[deduped$group_instance_id == "study_site_2"], 0.7)
+})

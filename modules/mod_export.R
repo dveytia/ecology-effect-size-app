@@ -66,7 +66,9 @@ mod_export_ui <- function(id) {
               downloadButton(ns("dl_full"), tagList(icon("download"), " Full Export"),
                              class = "btn btn-primary me-2"),
               downloadButton(ns("dl_meta"), tagList(icon("chart-line"), " Meta-Ready Export"),
-                             class = "btn btn-success")
+                             class = "btn btn-success me-2"),
+              downloadButton(ns("dl_json"), tagList(icon("code"), " JSON Export"),
+                             class = "btn btn-outline-secondary")
             )
           )
         )
@@ -239,12 +241,37 @@ mod_export_server <- function(id, project_id, session_rv) {
           }
         )
         if (nrow(df) == 0) {
-          showNotification("No rows with computed effect sizes match the current filters.",
-                           type = "warning")
+          diag_msg <- attr(df, "meta_export_msg") %||%
+            paste0("No rows with a computed effect size match the current filters.")
+          showNotification(diag_msg, type = "warning", duration = 15)
+        } else if (!is.null(attr(df, "meta_export_msg"))) {
+          # Show flag summary (some rows incomplete but export proceeds)
+          showNotification(attr(df, "meta_export_msg"),
+                           type = "warning", duration = 12)
         }
         writexl::write_xlsx(df, file)
       },
       contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    # ---- JSON download ----
+    output$dl_json <- downloadHandler(
+      filename = function() {
+        paste0("export_", format(Sys.Date(), "%Y%m%d"), ".json")
+      },
+      content = function(file) {
+        pid <- project_id()
+        req(pid, session_rv$token)
+        json_str <- tryCatch(
+          build_json_export(pid, .current_filters(), session_rv$token),
+          error = function(e) {
+            showNotification(paste("Export error:", e$message), type = "error")
+            "[]"
+          }
+        )
+        writeLines(json_str, file, useBytes = TRUE)
+      },
+      contentType = "application/json"
     )
 
   })
