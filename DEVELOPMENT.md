@@ -349,9 +349,26 @@ Export 10+ articles (some with label groups). Open in Excel: no `[object Object]
 ---
 
 
-**add phase here to allow copying labels between projects**
+## Phase 11: clone a project
 
-## Phase 11: Audit Log & Polish
+**Branch:** `phase-11-project clone`
+
+**Deliverables:**
+- `modules/project clone.R` - allows a user to choose to create a blank project or clone a project (i.e. an existing project serves as a template -- the same labels, description, etc are copied, but no articles and no collaborators) from an existing project
+
+
+**Validation Gate 11:**
+- When creating a new project, a dropdown list is added where a reviewer can choose to clone an existing project. 
+- Articles can be imported into the new cloned project without affecting the origin project
+- in the review tab, the reviewer can see all the labels displayed and able to fill in, exactly as in the source project, but with the new articles.
+- the article data with the corresponding labels exports correctly. 
+
+
+**Status:** [ ] Not started
+
+---
+
+## Phase 12: Audit Log & Polish
 
 **Branch:** `phase-11-polish`
 
