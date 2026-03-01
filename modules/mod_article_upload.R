@@ -87,9 +87,15 @@ mod_article_upload_server <- function(id, project_id, session_rv,
     # upload_done must be declared FIRST so existing_articles can depend on it
     upload_done <- reactiveVal(0)
 
+    # Gate: set to TRUE after a successful upload to hide stale preview.
+    # Reset to FALSE when the user selects a new file.
+    batch_just_uploaded <- reactiveVal(FALSE)
+
     # ---- Parse result reactive ---------------------------
     parse_result <- reactive({
       req(input$csv_file)
+      # Reset the upload gate when user picks a new file
+      batch_just_uploaded(FALSE)
       req(project_id(), session_rv$token)
       path <- input$csv_file$datapath
       fname_orig <- input$csv_file$name
@@ -132,6 +138,8 @@ mod_article_upload_server <- function(id, project_id, session_rv,
     # ---- Parse status message ----------------------------
     output$parse_status <- renderUI({
       req(input$csv_file)
+      # Hide parse status after successful upload
+      if (batch_just_uploaded()) return(NULL)
       pr <- parse_result()
       if (!pr$ok) {
         div(class = "alert alert-danger mt-2 mb-0",
@@ -146,6 +154,14 @@ mod_article_upload_server <- function(id, project_id, session_rv,
 
     # ---- Upload preview summary --------------------------
     output$upload_preview <- renderUI({
+      # Hide stale preview after successful upload to prevent
+      # false flagging (uploaded articles would match the same CSV)
+      if (batch_just_uploaded()) {
+        return(div(class = "alert alert-success mb-4",
+          icon("check-circle"),
+          " Upload complete! Select a new file to upload more articles."
+        ))
+      }
       pr <- parse_result()
       if (!pr$ok) return(NULL)
 
@@ -210,6 +226,7 @@ mod_article_upload_server <- function(id, project_id, session_rv,
 
     # ---- Upload button -----------------------------------
     output$upload_btn_area <- renderUI({
+      if (batch_just_uploaded()) return(NULL)
       pr <- parse_result()
       if (!pr$ok) return(NULL)
       n_dup   <- nrow(dup_result())
@@ -232,6 +249,7 @@ mod_article_upload_server <- function(id, project_id, session_rv,
 
     # ---- Inline preview table (first 10 rows) ------------
     output$preview_table_card <- renderUI({
+      if (batch_just_uploaded()) return(NULL)
       pr <- parse_result()
       if (!pr$ok) return(NULL)
       dups    <- dup_result()
@@ -320,6 +338,9 @@ mod_article_upload_server <- function(id, project_id, session_rv,
                   n_clean, if (n_clean == 1) "" else "s", n_dup),
           type = "message", duration = 8)
 
+        # Mark upload as done: this hides the stale preview/button
+        # BEFORE upload_done triggers existing_articles re-fetch
+        batch_just_uploaded(TRUE)
         shinyjs::reset("csv_file")
         upload_done(upload_done() + 1)
         if (!is.null(upload_refresh)) upload_refresh(upload_refresh() + 1)

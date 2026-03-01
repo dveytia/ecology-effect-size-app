@@ -22,7 +22,9 @@ Imports:
     readr (>= 2.1.0),
     data.table (>= 1.14.0),
     writexl (>= 1.4.0),
-    tools
+    tools,
+    shinycssloaders (>= 1.0.0),
+    shinytoastr (>= 0.2.0)
 Suggests:
     testthat (>= 3.0.0),
     googledrive (>= 2.1.0),

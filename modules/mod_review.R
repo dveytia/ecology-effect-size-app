@@ -43,21 +43,28 @@ mod_review_ui <- function(id) {
           ),
           div(class = "card-body p-0",
             style = "max-height: 75vh; overflow-y: auto;",
-            uiOutput(ns("article_list_ui"))
+            shinycssloaders::withSpinner(
+              uiOutput(ns("article_list_ui")),
+              type = 6, color = "#2C7A4B", size = 0.5
+            )
           )
         )
       ),
 
       # ---- Right: review panel -----------------------------
       div(class = "col-lg-9",
-        uiOutput(ns("review_panel"))
+        shinycssloaders::withSpinner(
+          uiOutput(ns("review_panel")),
+          type = 6, color = "#2C7A4B", size = 0.5
+        )
       )
     )
   )
 }
 
 # ---- Server ---------------------------------------------------
-mod_review_server <- function(id, project_id, session_rv) {
+mod_review_server <- function(id, project_id, session_rv,
+                              upload_refresh = NULL) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
@@ -90,6 +97,8 @@ mod_review_server <- function(id, project_id, session_rv) {
     # All articles for this project
     all_articles <- reactive({
       articles_refresh()
+      # Also refresh when new articles are uploaded (signal from upload module)
+      if (!is.null(upload_refresh)) upload_refresh()
       pid <- project_id()
       req(pid, session_rv$token)
       tryCatch({
@@ -1082,7 +1091,15 @@ mod_review_server <- function(id, project_id, session_rv) {
           filters = list(article_id = aid),
           select  = "json_data",
           token   = session_rv$token)
-        if (is.data.frame(rows)) { if (nrow(rows) > 0) rows$json_data[1] else NULL } else NULL
+        if (is.data.frame(rows) && nrow(rows) > 0) {
+          jd <- rows$json_data[1]
+          # Parse JSON string to an R list so .write_audit serialises
+          # it identically to new_json (avoids double-encoding)
+          if (is.character(jd) && nchar(jd) > 0)
+            jsonlite::fromJSON(jd, simplifyVector = FALSE)
+          else if (is.list(jd)) jd
+          else NULL
+        } else NULL
       }, error = function(e) NULL)
 
       # Upsert metadata
@@ -1299,13 +1316,13 @@ mod_review_server <- function(id, project_id, session_rv) {
 
       # Concurrency warning
       if (.has_conflict(aid)) {
-        showNotification(
+        toast_warning(
           paste("Another reviewer saved changes to this article since you loaded it.",
                 "Your save has been recorded. Review the audit log to check for conflicts."),
-          type = "warning", duration = 12
+          title = "Concurrent Edit Detected"
         )
       } else {
-        showNotification("Saved successfully.", type = "message", duration = 3)
+        toast_success("Saved successfully.")
       }
 
       articles_refresh(articles_refresh() + 1L)
@@ -1331,14 +1348,13 @@ mod_review_server <- function(id, project_id, session_rv) {
     # --------------------------------------------------------
     observeEvent(input$btn_save, {
       tryCatch(.do_save(), error = function(e)
-        showNotification(paste("Save failed:", e$message), type = "error"))
+        toast_error(paste("Save failed:", e$message)))
     })
 
     observeEvent(input$btn_next, {
       ok <- tryCatch({ .do_save(); TRUE },
                      error = function(e) {
-                       showNotification(paste("Save failed:", e$message),
-                                        type = "error")
+                       toast_error(paste("Save failed:", e$message))
                        FALSE
                      })
       if (ok) .go_next()
@@ -1352,11 +1368,11 @@ mod_review_server <- function(id, project_id, session_rv) {
           list(review_status = "skipped"),
           token = session_rv$token)
         .write_audit(aid, "skip")
-        showNotification("Article skipped.", type = "message", duration = 3)
+        toast_success("Article skipped.")
         articles_refresh(articles_refresh() + 1L)
         .go_next()
       }, error = function(e)
-        showNotification(paste("Skip failed:", e$message), type = "error"))
+        toast_error(paste("Skip failed:", e$message)))
     })
 
   })

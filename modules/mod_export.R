@@ -78,7 +78,10 @@ mod_export_ui <- function(id) {
       div(class = "card",
         div(class = "card-header", icon("table"), " Preview (first 20 rows)"),
         div(class = "card-body", style = "overflow-x: auto;",
-          tableOutput(ns("preview_table"))
+          shinycssloaders::withSpinner(
+            tableOutput(ns("preview_table")),
+            type = 6, color = "#2C7A4B", size = 0.5
+          )
         )
       )
     )

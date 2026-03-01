@@ -61,6 +61,57 @@ tooltip_icon <- function(text) {
   )
 }
 
+# ---- Toast notification helpers (shinytoastr) ---------------
+# These wrap shinytoastr functions with sensible defaults.
+# Use toast_error() in tryCatch error handlers for a polished
+# non-blocking notification.  Falls back to showNotification()
+# if shinytoastr is not loaded.
+
+#' Show an error toast notification
+#'
+#' @param msg    Message text
+#' @param title  Optional toast title (default "Error")
+toast_error <- function(msg, title = "Error") {
+  if (requireNamespace("shinytoastr", quietly = TRUE)) {
+    shinytoastr::toastr_error(msg, title = title,
+                              closeButton = TRUE,
+                              timeOut = 8000,
+                              position = "top-right")
+  } else {
+    showNotification(msg, type = "error")
+  }
+}
+
+#' Show a success toast notification
+#'
+#' @param msg    Message text
+#' @param title  Optional toast title (default "Success")
+toast_success <- function(msg, title = "Success") {
+  if (requireNamespace("shinytoastr", quietly = TRUE)) {
+    shinytoastr::toastr_success(msg, title = title,
+                                 closeButton = TRUE,
+                                 timeOut = 4000,
+                                 position = "top-right")
+  } else {
+    showNotification(msg, type = "message")
+  }
+}
+
+#' Show a warning toast notification
+#'
+#' @param msg    Message text
+#' @param title  Optional toast title (default "Warning")
+toast_warning <- function(msg, title = "Warning") {
+  if (requireNamespace("shinytoastr", quietly = TRUE)) {
+    shinytoastr::toastr_warning(msg, title = title,
+                                 closeButton = TRUE,
+                                 timeOut = 6000,
+                                 position = "top-right")
+  } else {
+    showNotification(msg, type = "warning")
+  }
+}
+
 #' Clone labels from one project to another
 #'
 #' Copies all labels (single + groups + children) from a source project

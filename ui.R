@@ -13,6 +13,7 @@ ui <- page_fluid(
   ),
 
   useShinyjs(),
+  useToastr(),
 
   # Include custom assets
   tags$head(

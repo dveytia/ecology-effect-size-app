@@ -13,6 +13,8 @@ library(httr2)
 library(readr)
 library(stringdist)
 library(jsonlite)
+library(shinycssloaders)
+library(shinytoastr)
 
 # ---- Source helpers -----------------------------------------
 source("R/utils.R")
