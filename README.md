@@ -279,7 +279,7 @@ ecology-effect-size-app/
 │   ├── custom.css               # ✅ Custom styles
 │   └── tooltips.js              # ✅ Bootstrap tooltip initialisation
 ├── .Renviron.example            # ✅ Template — copy to .Renviron and fill in your keys
-├── .gitignore                   # ✅ Excludes .Renviron, .httr-oauth, *.csv, *.zip
+├── .gitignore                   # ✅ Excludes .Renviron, *.csv, *.zip
 ├── DESCRIPTION                  # R package metadata (for renv)
 ├── DEVELOPMENT.md               # Phase-by-phase developer checklist
 └── EcologyApp_Design_Spec_v3.2.md  # Full technical specification

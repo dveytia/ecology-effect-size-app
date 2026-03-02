@@ -552,8 +552,7 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
               tags$br(),
               tags$small(class = "text-muted",
                 "Ensure the folder is shared as \"Anyone with the link can view\"",
-                " and that Google Drive auth has been set up (run gdrive_init_oauth())",
-                " from the R console)."))
+                " and that GOOGLE_API_KEY is set in .Renviron (see R/gdrive.R header)."))
         )
         return()
       }

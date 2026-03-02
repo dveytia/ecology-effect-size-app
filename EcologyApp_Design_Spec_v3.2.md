@@ -362,9 +362,9 @@ The project owner pastes a single shared Google Drive folder URL into the projec
 
 - The Drive folder must be shared as **"Anyone with the link can view"** (or more permissive)
 - PDFs must be named exactly `[article_id].pdf` where `article_id` matches the integer ID in the `articles` table (e.g. `123.pdf`)
-- The app authenticates with Google Drive using OAuth 2.0 via the `googledrive` R package
-- OAuth credentials (Client ID + Client Secret) are stored in `.Renviron` as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`
-- The OAuth token is obtained once by the project owner (or app administrator) and cached server-side
+- The app accesses Drive via the **Google Drive API v3** using a server-side **API key** (no OAuth, no per-user login)
+- The API key is stored in `.Renviron` as `GOOGLE_API_KEY=AIza...` and is shared across all users and projects
+- Because the key only has read access to publicly shared files, each user's folder **must** be shared as "Anyone with the link can view"
 
 ### Project Settings UI
 
@@ -445,11 +445,10 @@ The owner should re-run Sync whenever new PDFs are added to the Drive folder. Th
 ### `.Renviron` additions for Google Drive
 
 ```
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-client-secret
+GOOGLE_API_KEY=AIza...
 ```
 
-OAuth token is cached by `googledrive` in a local `.httr-oauth` file (excluded from git via `.gitignore`).
+No OAuth flow, no token file, and no `googledrive` package required. The key provides read-only access to any publicly shared folder via the Drive API v3.
 
 ### `R/gdrive.R` Functions
 
@@ -977,7 +976,6 @@ Add these lines to the default R `.gitignore`:
 
 ```
 .Renviron
-.httr-oauth
 *.csv
 *.zip
 renv/library/
@@ -1103,8 +1101,7 @@ CREATE TRIGGER on_auth_user_created
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your-anon-key-here
 SUPABASE_SERVICE_KEY=your-service-key-here
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-client-secret
+GOOGLE_API_KEY=your-api-key-here
 ```
 
 #### `README.md`
@@ -1234,8 +1231,8 @@ Upload a CSV of 20 articles. Then upload a second CSV containing 2 exact DOI dup
 - `pdf_drive_link` populated in `articles` table after sync
 
 **Steps:**
-1. Register a Google Cloud project and enable the Drive API; obtain OAuth 2.0 Client ID and Secret
-2. Add `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` to `.Renviron`
+1. Enable the Google Drive API in Google Cloud Console; create an API key (_APIs & Services → Credentials → + CREATE CREDENTIALS → API key_)
+2. Add `GOOGLE_API_KEY=AIza...` to `.Renviron`
 3. Write `R/gdrive.R`: `extract_drive_folder_id()`, `gdrive_list_pdfs()`, `parse_article_id_from_filename()`, `sync_drive_folder()`
 4. Add Drive folder URL text input to Edit Project modal
 5. On save: extract folder ID, store in `projects.drive_folder_id`
