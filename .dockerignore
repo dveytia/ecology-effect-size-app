@@ -1,0 +1,28 @@
+# ── Secrets — must never enter the image ──────────────────────
+.Renviron
+.env
+
+# ── Git / IDE ──────────────────────────────────────────────────
+.git
+.gitignore
+.Rproj.user
+*.Rproj
+
+# ── R dev artefacts ───────────────────────────────────────────
+renv/
+renv.lock
+.Rhistory
+.RData
+.RDataTmp
+
+# ── Test outputs & large test data ────────────────────────────
+tests/test_outputs/
+
+# ── OS / editor noise ─────────────────────────────────────────
+__pycache__/
+*.log
+Thumbs.db
+.DS_Store
+
+# ── Documentation only (not needed at runtime) ────────────────
+docs/
