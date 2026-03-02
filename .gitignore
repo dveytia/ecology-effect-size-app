@@ -44,6 +44,12 @@ vignettes/*.pdf
 # R Environment Variables
 .Renviron
 
+# Docker secrets
+.env
+
+# Docker log volume
+logs/
+
 
 # renv package library (restored via renv::restore())
 renv/library/

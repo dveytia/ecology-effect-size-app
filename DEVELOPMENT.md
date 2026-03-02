@@ -644,7 +644,7 @@ services:
     environment:
       # Supabase connection — read from the .env file (see §13.5)
       SUPABASE_URL:         ${SUPABASE_URL}
-      SUPABASE_ANON_KEY:    ${SUPABASE_ANON_KEY}
+      SUPABASE_KEY:         ${SUPABASE_KEY}
       SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
       # Google Drive API key — no OAuth needed; folders must be shared publicly
       GOOGLE_API_KEY:       ${GOOGLE_API_KEY}
@@ -668,7 +668,7 @@ Docker Compose reads a `.env` file in the same directory automatically. **Never 
 ```dotenv
 # .env  — local secrets (add to .gitignore)
 SUPABASE_URL=https://xxxxxxxxxxx.supabase.co
-SUPABASE_ANON_KEY=eyJ...
+SUPABASE_KEY=eyJ...
 SUPABASE_SERVICE_KEY=eyJ...
 GOOGLE_API_KEY=AIza...
 ```
