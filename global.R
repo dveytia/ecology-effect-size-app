@@ -37,9 +37,9 @@ source("modules/mod_effect_size_ui.R")
 source("modules/mod_export.R")
 source("modules/mod_audit_log.R")
 
-# ---- Google Drive auth (loads cached OAuth token) -----------
-# Token is cached in .httr-oauth after running gdrive_init_oauth() once.
-# If no token is available, Drive features are silently disabled.
+# ---- Google Drive (checks for GOOGLE_API_KEY env var) ------
+# No OAuth or token file required. If GOOGLE_API_KEY is not set,
+# Drive features are silently disabled.
 gdrive_init()
 
 # ---- Global options -----------------------------------------

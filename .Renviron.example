@@ -18,6 +18,7 @@ SUPABASE_KEY=your-anon-public-key-here
 SUPABASE_SERVICE_KEY=your-service-role-key-here
 
 # --- Google Drive (Phase 6) ---------------------------------
-# Found in: Google Cloud Console → APIs & Services → Credentials
-GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=your-client-secret-here
+# Found in: Google Cloud Console → APIs & Services → Credentials → API key
+# The folder must be shared as "Anyone with the link can view".
+# No OAuth, no token file required.
+GOOGLE_API_KEY=your-api-key-here
