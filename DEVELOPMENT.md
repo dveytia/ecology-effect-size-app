@@ -538,156 +538,9 @@ You should see SELECT/INSERT/UPDATE/DELETE policies with `TO authenticated` and 
 | `.Renviron` file with all secrets | — | Mounted as env vars at runtime |
 
 ---
+Delivers: Docker-file, `.dockerignore`, `docker-compose.yml`, `.env`
 
-### 13.2 Dockerfile
 
-Create `Dockerfile` in the project root:
-
-```dockerfile
-# ── Stage 1: base image ──────────────────────────────────────────────────────
-FROM rocker/shiny:4.3.3
-
-LABEL maintainer="you@example.com"
-LABEL org.opencontainers.image.description="Ecology Effect Size Coding Platform"
-
-# ── System libraries required by R packages ──────────────────────────────────
-# libssl / libcurl: httr2 | libxml2: xml2 (googledrive dep) | libgdal / libgeos: sf
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libssl-dev \
-    libcurl4-openssl-dev \
-    libxml2-dev \
-    libgdal-dev \
-    libgeos-dev \
-    libproj-dev \
-    libudunits2-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# ── Install R packages ────────────────────────────────────────────────────────
-# Use pak for faster, parallel installs with lock-file reproducibility.
-RUN R -e "install.packages('pak', repos='https://r-lib.github.io/p/pak/stable/')"
-
-# Core (required at runtime)
-RUN R -e "pak::pak(c( \
-    'shiny@>=1.8.0', \
-    'bslib@>=0.7.0', \
-    'shinyjs@>=2.1.0', \
-    'httr2@>=1.0.0', \
-    'jsonlite@>=1.8.0', \
-    'stringr@>=1.5.0', \
-    'stringdist@>=0.9.0', \
-    'readr@>=2.1.0', \
-    'data.table@>=1.14.0', \
-    'writexl@>=1.4.0', \
-    'shinycssloaders@>=1.0.0', \
-    'shinytoastr@>=0.2.0' \
-))"
-
-# Optional (Drive sync + map export — install separately so a failure here
-# doesn't break the core image build)
-RUN R -e "pak::pak(c('googledrive@>=2.1.0','ggplot2@>=3.4.0','maps','sf','osmdata'))" \
-    || echo "WARNING: optional packages failed — Drive sync and map export will be disabled"
-
-# ── Copy application source ───────────────────────────────────────────────────
-WORKDIR /srv/shiny-server/ecology-effect-size-app
-COPY . .
-
-# Remove secrets and dev artefacts that must not be baked into the image
-RUN rm -f .Renviron
-
-# ── Permissions ───────────────────────────────────────────────────────────────
-# shiny-server runs as the 'shiny' user; give it write access to the log dir
-RUN chown -R shiny:shiny /srv/shiny-server /var/log/shiny-server
-
-# ── Expose default Shiny port ────────────────────────────────────────────────
-EXPOSE 3838
-
-CMD ["/usr/bin/shiny-server"]
-```
-
----
-
-### 13.3 `.dockerignore`
-
-Create `.dockerignore` in the project root to keep the build context small and secrets out of the image:
-
-```
-.Renviron
-.git
-.gitignore
-*.Rproj
-*.Rproj.user/
-renv/
-renv.lock
-node_modules/
-tests/test_outputs/
-__pycache__/
-*.log
-```
-
----
-
-### 13.4 `docker-compose.yml`
-
-```yaml
-version: "3.9"
-
-services:
-  shiny:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: ecology-effect-size-app:latest
-    container_name: ecology-effect-size-app
-    restart: unless-stopped
-    ports:
-      - "3838:3838"          # host:container — change host port if 3838 is taken
-    environment:
-      # Supabase connection — read from the .env file (see §13.5)
-      SUPABASE_URL:         ${SUPABASE_URL}
-      SUPABASE_KEY:         ${SUPABASE_KEY}
-      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY}
-      # Google Drive API key — no OAuth needed; folders must be shared publicly
-      GOOGLE_API_KEY:       ${GOOGLE_API_KEY}
-    volumes:
-      # Persist shiny-server logs on the host for inspection
-      - ./logs/shiny-server:/var/log/shiny-server
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3838/ecology-effect-size-app"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-```
-
----
-
-### 13.5 Environment Variables (`.env` file)
-
-Docker Compose reads a `.env` file in the same directory automatically. **Never commit this file.**
-
-```dotenv
-# .env  — local secrets (add to .gitignore)
-SUPABASE_URL=https://xxxxxxxxxxx.supabase.co
-SUPABASE_KEY=eyJ...
-SUPABASE_SERVICE_KEY=eyJ...
-GOOGLE_API_KEY=AIza...
-```
-
-Add to `.gitignore`:
-```
-.env
-```
-
-> **Why not use `.Renviron`?**  
-> `.Renviron` is read by the R process, not by Docker. Passing secrets as
-> environment variables (via `docker-compose.yml` + `.env`) is the standard
-> Docker pattern and avoids baking secrets into the image. The R code already
-> calls `Sys.getenv("SUPABASE_URL")` etc., so it reads them transparently from
-> the environment regardless of source.
-
----
-
-### 13.6 Google Drive API Key
 
 Drive sync uses a **Google API key** — no OAuth flow, no cached token file, no
 per-user credentials. The key is passed as an environment variable and works for
@@ -711,7 +564,7 @@ app continues normally.
 
 ---
 
-### 13.7 Build & Run
+### Build & Run
 
 ```bash
 # Build the image (first time: ~5–10 min due to R package installs)
@@ -769,9 +622,8 @@ Add to Dockerfile (before the `EXPOSE` line):
 COPY shiny-server.conf /etc/shiny-server/shiny-server.conf
 ```
 
----
 
-### 13.9 Production Deployment Notes
+### Docker Production Deployment Notes
 
 | Concern | Recommendation |
 |---------|---------------|
@@ -819,7 +671,7 @@ docker exec ecology-effect-size-app Rscript -e \
 
 **Pass criteria:** Parts A, B, and C all pass.
 
-**Status:** [ ] Not started  [ ] In progress  [ ] Gate passed
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
 

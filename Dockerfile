@@ -27,26 +27,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN R -e "install.packages('pak', repos = 'https://r-lib.github.io/p/pak/stable/')"
 
 # ── Core R packages (required at runtime) ────────────────────────────────────
+# No version suffixes — pak installs the latest CRAN release, which always
+# satisfies the minimums declared in DESCRIPTION. 'tools' is a base package
+# and must not be listed here.
 RUN R -e "pak::pak(c( \
-    'shiny@>=1.8.0', \
-    'bslib@>=0.7.0', \
-    'shinyjs@>=2.1.0', \
-    'httr2@>=1.0.0', \
-    'jsonlite@>=1.8.0', \
-    'stringr@>=1.5.0', \
-    'stringdist@>=0.9.0', \
-    'readr@>=2.1.0', \
-    'data.table@>=1.14.0', \
-    'writexl@>=1.4.0', \
-    'tools', \
-    'shinycssloaders@>=1.0.0', \
-    'shinytoastr@>=0.2.0' \
+    'shiny', \
+    'bslib', \
+    'shinyjs', \
+    'httr2', \
+    'jsonlite', \
+    'stringr', \
+    'stringdist', \
+    'readr', \
+    'data.table', \
+    'writexl', \
+    'shinycssloaders', \
+    'shinytoastr' \
 ))"
 
 # ── Optional R packages (map export) ─────────────────────────────────────────
 # Failures here do not break the build; map export will simply be unavailable.
 RUN R -e "tryCatch( \
-    pak::pak(c('ggplot2@>=3.4.0', 'maps', 'sf', 'osmdata')), \
+    pak::pak(c('ggplot2', 'maps', 'sf', 'osmdata')), \
     error = function(e) message('WARNING: optional map packages failed — ', conditionMessage(e)) \
 )"
 
@@ -60,10 +62,18 @@ RUN rm -f .Renviron
 # ── Custom shiny-server config ────────────────────────────────────────────────
 COPY shiny-server.conf /etc/shiny-server/shiny-server.conf
 
+# ── Entrypoint: write env vars to Renviron.site before starting server ───────
+# shiny-server spawns R processes as the 'shiny' user which doesn't inherit
+# the container environment. Writing to /etc/R/Renviron.site makes vars
+# available to all R processes regardless of which user runs them.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN sed -i 's/\r//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
+
 # ── Permissions ───────────────────────────────────────────────────────────────
 RUN chown -R shiny:shiny /srv/shiny-server /var/log/shiny-server
 
 # ── Expose Shiny port ─────────────────────────────────────────────────────────
 EXPOSE 3838
 
-CMD ["/usr/bin/shiny-server"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
