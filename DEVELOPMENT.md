@@ -671,7 +671,7 @@ docker exec ecology-effect-size-app Rscript -e \
 
 **Pass criteria:** Parts A, B, and C all pass.
 
-**Status:** [ ] Not started  [ ] In progress  [ ] Gate passed
+**Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
 ---
 
