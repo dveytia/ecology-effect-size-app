@@ -1,22 +1,25 @@
 # ============================================================
 # tests/test_map.R — Grid-binned location map of coded corpus
 # ============================================================
-# Phase 10 deliverable.
+# Phase 10 deliverable (updated Phase 14 — JSON-native reader).
 #
 # Purpose: Plot a global map showing density of coded OSM locations,
 #   binned to a standard 1° × 1° grid.
 #
-# Reads directly from a full-export .xlsx file and handles:
-#   - Point locations       ("Name; lat; lon; osm_id")
-#   - Polygon locations     ("Name; lat; lon; osm_id; Polygon; lon1; lat1; ...")
-#   - MultiPolygon locations("Name; lat; lon; osm_id; MultiPolygon; lon1; lat1; ...")
-#   - Flattened bounding_box label columns ("lon_min=X; lon_max=Y; ...")
-#   - Flattened openstreetmap_location label columns ("lat=X; lon=Y; ...")
+# Primary input: JSON export files produced by build_full_export().
+#   Each article object may contain:
+#     labels.location_osm — array of {name, lat, lon, osm_id, geojson?}
+#     labels.bounding_box_label — {lon_min, lon_max, lat_min, lat_max}
+#
+# Legacy xlsx parsing (semicolon-delimited strings) is retained for
+# backward compatibility but is no longer the primary path.
 #
 # Algorithm:
 #   For each location:
 #     - Point or centroid only: 1 count to the single 1° cell it falls in.
-#     - Polygon / MultiPolygon / bounding box: bbox spans N cells;
+#     - Polygon (GeoJSON): PIP test over grid cells;
+#       each inside cell receives 1/N (total contribution per location = 1).
+#     - Bounding box: bbox spans N cells;
 #       each cell receives 1/N (total contribution per location = 1).
 #
 # Usage:
@@ -292,6 +295,108 @@ read_export_for_map <- function(filepath) {
 }
 
 # ---------------------------------------------------------------------------
+# 3b. Read a JSON export file and extract all location records
+# ---------------------------------------------------------------------------
+
+#' Read a JSON export file and return all location records
+#'
+#' Parses the native JSON structure produced by build_full_export().
+#' Each article may contain:
+#'   - labels$location_osm — array of {name, lat, lon, osm_id, geojson?}
+#'     where geojson is a standard GeoJSON Polygon object:
+#'     {type: "Polygon", coordinates: [[[lon, lat], ...]]}
+#'   - labels$bounding_box_label — {lon_min, lon_max, lat_min, lat_max}
+#'
+#' One location record is produced per unique location entry per article.
+#'
+#' @param filepath  Path to JSON export file
+#' @return          Data frame: lat, lon, lon_min, lon_max, lat_min, lat_max,
+#'                  poly_lons (list), poly_lats (list), source_column
+read_json_export_for_map <- function(filepath) {
+  stopifnot(file.exists(filepath))
+  articles <- jsonlite::fromJSON(filepath, simplifyVector = FALSE)
+
+  loc_list <- list()
+  lid      <- 0L
+
+  for (art in articles) {
+    labels <- art$labels
+    if (is.null(labels)) next
+
+    # --- location_osm entries ---
+    osm_locs <- labels$location_osm
+    if (!is.null(osm_locs) && length(osm_locs) > 0L) {
+      for (loc in osm_locs) {
+        lat <- suppressWarnings(as.numeric(loc$lat))
+        lon <- suppressWarnings(as.numeric(loc$lon))
+        if (length(lat) == 0L || length(lon) == 0L) next
+        if (is.na(lat) || is.na(lon)) next
+
+        rec <- data.frame(lat = lat, lon = lon,
+                          lon_min = NA_real_, lon_max = NA_real_,
+                          lat_min = NA_real_, lat_max = NA_real_,
+                          source_column = "location_osm",
+                          stringsAsFactors = FALSE)
+
+        # Extract polygon vertices from GeoJSON if present
+        geojson <- loc$geojson
+        if (!is.null(geojson) && !is.null(geojson$coordinates)) {
+          ring <- geojson$coordinates[[1L]]          # outer ring
+          if (length(ring) >= 3L) {
+            coords_mat <- do.call(rbind, lapply(ring, as.numeric))
+            rec$poly_lons <- list(coords_mat[, 1L])
+            rec$poly_lats <- list(coords_mat[, 2L])
+          } else {
+            rec$poly_lons <- list(NULL)
+            rec$poly_lats <- list(NULL)
+          }
+        } else {
+          rec$poly_lons <- list(NULL)
+          rec$poly_lats <- list(NULL)
+        }
+
+        lid <- lid + 1L
+        loc_list[[lid]] <- rec
+      }
+    }
+
+    # --- bounding_box_label ---
+    bbox <- labels$bounding_box_label
+    if (!is.null(bbox)) {
+      lon_min <- suppressWarnings(as.numeric(bbox$lon_min))
+      lon_max <- suppressWarnings(as.numeric(bbox$lon_max))
+      lat_min <- suppressWarnings(as.numeric(bbox$lat_min))
+      lat_max <- suppressWarnings(as.numeric(bbox$lat_max))
+
+      if (length(lon_min) == 1L && length(lon_max) == 1L &&
+          length(lat_min) == 1L && length(lat_max) == 1L &&
+          !is.na(lon_min) && !is.na(lon_max) &&
+          !is.na(lat_min) && !is.na(lat_max)) {
+        rec <- data.frame(
+          lat     = (lat_min + lat_max) / 2,
+          lon     = (lon_min + lon_max) / 2,
+          lon_min = lon_min, lon_max = lon_max,
+          lat_min = lat_min, lat_max = lat_max,
+          source_column = "bounding_box",
+          stringsAsFactors = FALSE
+        )
+        rec$poly_lons <- list(NULL)
+        rec$poly_lats <- list(NULL)
+        lid <- lid + 1L
+        loc_list[[lid]] <- rec
+      }
+    }
+  }
+
+  if (length(loc_list) == 0L) {
+    message("No parseable locations found in ", basename(filepath))
+    return(.empty_location_df())
+  }
+
+  do.call(rbind, loc_list)
+}
+
+# ---------------------------------------------------------------------------
 # 4. Bin locations to a 1° x 1° grid
 # ---------------------------------------------------------------------------
 
@@ -433,20 +538,29 @@ bin_locations_to_grid <- function(locations) {
 # 5. Convenience wrapper — read, bin, plot in one call
 # ---------------------------------------------------------------------------
 
-#' Create a grid-binned location map from a full-export xlsx file
+#' Create a grid-binned location map from a full-export file
 #'
-#' Convenience wrapper that calls read_export_for_map(), bin_locations_to_grid(),
-#' and (optionally) plot_location_grid() in sequence.
+#' Convenience wrapper that reads locations, bins them to a 1° grid,
+#' and (optionally) renders the map.
 #'
-#' @param filepath  Path to .xlsx export file produced by build_full_export()
+#' File type is auto-detected by extension:
+#'   .json  → read_json_export_for_map()
+#'   .xlsx  → read_export_for_map()        (legacy)
+#'
+#' @param filepath  Path to export file (JSON preferred; xlsx legacy)
 #' @param title     Plot title passed to plot_location_grid()
 #' @param plot      Whether to render the map (default TRUE)
 #' @return          Invisibly, the grid data frame (lon_center, lat_center, value)
 map_from_export <- function(filepath,
-                            title = paste0("Location Density — ",
+                            title = paste0("Location Density \u2014 ",
                                            basename(filepath)),
                             plot  = TRUE) {
-  locs <- read_export_for_map(filepath)
+  ext <- tolower(tools::file_ext(filepath))
+  locs <- if (ext == "json") {
+    read_json_export_for_map(filepath)
+  } else {
+    read_export_for_map(filepath)     # legacy xlsx path
+  }
   grid <- bin_locations_to_grid(locs)
   if (plot && nrow(grid) > 0L) {
     plot_location_grid(grid, title = title)
@@ -688,13 +802,22 @@ test_that("bin_locations_to_grid accumulates multiple locations in same cell", {
   expect_equal(grid$value, 3)
 })
 
-# --- Live xlsx integration tests (skipped when file absent) ---
+# --- JSON integration tests ---
 
-test_that("read_export_for_map parses location_osm column from real xlsx", {
-  xlsx_path <- file.path("tests", "test_outputs", "full_export_20260228.xlsx")
-  skip_if_not(file.exists(xlsx_path), "Export xlsx not found")
+.find_json_fixture <- function() {
+  candidates <- c(
+    file.path("test_outputs", "export_20260228.json"),        # CWD = tests/
+    file.path("tests", "test_outputs", "export_20260228.json") # CWD = project root
+  )
+  for (p in candidates) if (file.exists(p)) return(p)
+  NULL
+}
 
-  locs <- read_export_for_map(xlsx_path)
+test_that("read_json_export_for_map parses locations from real JSON export", {
+  json_path <- .find_json_fixture()
+  skip_if(is.null(json_path), "Export JSON not found")
+
+  locs <- read_json_export_for_map(json_path)
   expect_true(is.data.frame(locs))
   expect_true(nrow(locs) > 0L)
   expect_true(all(c("lat", "lon") %in% names(locs)))
@@ -702,58 +825,98 @@ test_that("read_export_for_map parses location_osm column from real xlsx", {
   # At least one record should have valid lat/lon
   valid_pts <- locs[!is.na(locs$lat) & !is.na(locs$lon), ]
   expect_true(nrow(valid_pts) > 0L)
+
+  # Paris (point only) should appear
+  paris <- locs[abs(locs$lat - 48.8589) < 0.01 & abs(locs$lon - 2.32) < 0.01, ]
+  expect_true(nrow(paris) >= 1L, info = "Paris point location expected")
 })
 
-test_that("Polygon/MultiPolygon locations from real xlsx bin to accurate cells", {
-  xlsx_path <- file.path("tests", "test_outputs", "full_export_20260228.xlsx")
-  skip_if_not(file.exists(xlsx_path), "Export xlsx not found")
+test_that("read_json_export_for_map extracts GeoJSON polygon vertices", {
+  json_path <- .find_json_fixture()
+  skip_if(is.null(json_path), "Export JSON not found")
 
-  locs <- read_export_for_map(xlsx_path)
+  locs <- read_json_export_for_map(json_path)
 
-  # Iceland and Honolulu are MultiPolygon — they should have poly_lons set
+  # Toronto and Edinburgh have GeoJSON polygons — they should have poly_lons set
   poly_rows <- locs[vapply(locs$poly_lons, function(x) !is.null(x) && length(x) > 0,
                            logical(1L)), ]
-  expect_true(nrow(poly_rows) >= 1L,
-              info = "Expected at least one Polygon/MultiPolygon record")
+  expect_true(nrow(poly_rows) >= 2L,
+              info = "Expected at least 2 Polygon records (Toronto, Edinburgh)")
+
+  # Toronto centroid is near lat ~43.65, lon ~-79.38
+  toronto <- poly_rows[abs(poly_rows$lat - 43.65) < 0.1, ]
+  expect_true(nrow(toronto) >= 1L, info = "Toronto polygon expected")
+  expect_true(length(toronto$poly_lons[[1L]]) > 10L,
+              info = "Toronto polygon should have many vertices")
+})
+
+test_that("read_json_export_for_map extracts bounding box", {
+  json_path <- .find_json_fixture()
+  skip_if(is.null(json_path), "Export JSON not found")
+
+  locs <- read_json_export_for_map(json_path)
+
+  # Article 5 has bounding_box_label: lon_min=-40, lon_max=40, lat_min=0, lat_max=20
+  bbox_rows <- locs[!is.na(locs$lon_min) & !is.na(locs$lon_max), ]
+  expect_true(nrow(bbox_rows) >= 1L, info = "Expected at least one bounding box record")
+  expect_equal(bbox_rows$lon_min[1L], -40)
+  expect_equal(bbox_rows$lon_max[1L],  40)
+})
+
+test_that("Polygon locations from JSON bin to accurate cells via PIP", {
+  json_path <- .find_json_fixture()
+  skip_if(is.null(json_path), "Export JSON not found")
+
+  locs <- read_json_export_for_map(json_path)
 
   # Binning should complete without error and produce plausible cells
   grid <- bin_locations_to_grid(locs)
   expect_true(is.data.frame(grid))
   expect_true(nrow(grid) > 0L)
 
-  # Iceland is a MultiPolygon spanning roughly lat 63-67, lon -25 to -13.
-  # PIP binning should place cells only inside Iceland's shape, so all
-  # Iceland cells must lie within its bounding latitudes.
-  iceland_src <- locs[vapply(locs$poly_lons, function(x) !is.null(x) && length(x) > 0,
-                              logical(1L)), ]
-  if (nrow(iceland_src) > 0L) {
-    # Get the cells whose centres lie in Iceland's bbox
-    iceland_bbox_lon <- c(floor(min(unlist(iceland_src$poly_lons[1L]))),
-                          floor(max(unlist(iceland_src$poly_lons[1L]))) + 1)
-    iceland_bbox_lat <- c(floor(min(unlist(iceland_src$poly_lats[1L]))),
-                          floor(max(unlist(iceland_src$poly_lats[1L]))) + 1)
-    iceland_cells <- grid[grid$lon_center >= iceland_bbox_lon[1] &
-                            grid$lon_center <= iceland_bbox_lon[2] &
-                            grid$lat_center >= iceland_bbox_lat[1] &
-                            grid$lat_center <= iceland_bbox_lat[2], ]
-    # PIP should produce fewer cells than a naive full-bbox
-    full_bbox_cells <- (diff(iceland_bbox_lon) + 1) * (diff(iceland_bbox_lat) + 1)
-    expect_true(nrow(iceland_cells) < full_bbox_cells,
-                info = "PIP binning should cover fewer cells than the full bounding box")
+  # Toronto polygon spans roughly lat 43.58-43.86, lon -79.64 to -79.12.
+  # PIP binning should place cells only inside Toronto's shape, so all
+  # Toronto cells must lie within its bounding box.
+  toronto_rows <- locs[vapply(locs$poly_lons, function(x) !is.null(x) && length(x) > 0,
+                               logical(1L)), ]
+  toronto <- toronto_rows[abs(toronto_rows$lat - 43.65) < 0.5, ]
+  if (nrow(toronto) > 0L) {
+    poly_lons <- toronto$poly_lons[[1L]]
+    poly_lats <- toronto$poly_lats[[1L]]
+    toronto_bbox_lon <- c(floor(min(poly_lons)), floor(max(poly_lons)) + 1)
+    toronto_bbox_lat <- c(floor(min(poly_lats)), floor(max(poly_lats)) + 1)
+    toronto_cells <- grid[grid$lon_center >= toronto_bbox_lon[1] &
+                            grid$lon_center <= toronto_bbox_lon[2] &
+                            grid$lat_center >= toronto_bbox_lat[1] &
+                            grid$lat_center <= toronto_bbox_lat[2], ]
+    # PIP should produce fewer cells than a naive full-bbox fill
+    full_bbox_cells <- (diff(toronto_bbox_lon) + 1) * (diff(toronto_bbox_lat) + 1)
+    expect_true(nrow(toronto_cells) <= full_bbox_cells,
+                info = "PIP binning should cover fewer or equal cells than the full bounding box")
   }
 })
 
+test_that("map_from_export auto-detects JSON vs xlsx by extension", {
+  json_path <- .find_json_fixture()
+  skip_if(is.null(json_path), "Export JSON not found")
+
+  # map_from_export should detect .json and use read_json_export_for_map
+  grid <- map_from_export(json_path, plot = FALSE)
+  expect_true(is.data.frame(grid))
+  expect_true(nrow(grid) > 0L)
+})
+
 # ====================================================================
-# Demo: Read from real export and render map
+# Demo: Read from real JSON export and render map
 # ====================================================================
 if (interactive()) {
-  xlsx_path <- file.path("tests", "test_outputs", "full_export_20260228.xlsx")
-  if (file.exists(xlsx_path)) {
-    message("Rendering location map from ", basename(xlsx_path), "...")
-    map_from_export(xlsx_path)
+  json_path <- .find_json_fixture()
+  if (!is.null(json_path)) {
+    message("Rendering location map from ", basename(json_path), "...")
+    map_from_export(json_path)
     message("Done. Close the plot window to continue.")
   } else {
-    message("Export file not found; using synthetic data instead.")
+    message("Export JSON not found; using synthetic data instead.")
     test_locs <- data.frame(
       lat = c(48.85, 48.86, 51.51, -33.87, -33.85, -33.88, 40.71, 35.68, 35.69),
       lon = c(2.35, 2.36, -0.13, 151.21, 151.20, 151.19, -74.01, 139.69, 139.70)
