@@ -165,3 +165,41 @@ body {
   border-left: 3px solid #ff9800 !important;
   background: rgba(255, 152, 0, 0.12) !important;
 }
+
+/* ---- Review two-column label layout ---------------------- */
+.review-label-grid .col-md-6 .mb-3 {
+  margin-bottom: 0.5rem !important;
+}
+
+/* ---- Responsive sidebar for split-screen / narrow -------- */
+/* On screens < 992px (lg breakpoint), sidebar is hidden by default,
+   main panel takes full width.  Toggle button shows/hides sidebar. */
+@media (max-width: 991.98px) {
+  .review-sidebar {
+    position: fixed;
+    top: 60px;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    z-index: 1040;
+    background: #fff;
+    box-shadow: 2px 0 8px rgba(0,0,0,0.15);
+    overflow-y: auto;
+    padding: 0.5rem;
+  }
+  .review-main-panel {
+    flex: 0 0 100%;
+    max-width: 100%;
+  }
+}
+
+/* ---- Popover styling for rich tooltips ------------------- */
+.popover {
+  max-width: 360px;
+  font-size: 0.85rem;
+}
+
+.popover hr {
+  margin: 4px 0;
+  opacity: 0.3;
+}

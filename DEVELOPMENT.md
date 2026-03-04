@@ -514,9 +514,174 @@ You should see SELECT/INSERT/UPDATE/DELETE policies with `TO authenticated` and 
 
 **Status:** [ ] Not started  [ ] In progress  [x] Gate passed
 
+## Phase 13: Additional PAMS features
+
+**Branch:** `PAMS-features`
+
+**Deliverables:**
+- `modules/mod_label_builder.R` — Updated with:
+  - Value-level definitions for `select one` / `select multiple` labels (JSON stored in `instructions` field as structured data)
+  - Export Label Schema button (downloads JSON with definitions)
+  - Import Label Schema button (uploads JSON, creates labels)
+- `modules/mod_review.R` — Updated with:
+  - Rich tooltip display: clicking ❓ icon shows label definition + value definitions in a popover
+  - Data preservation when adding/removing group instances (collects current input values before re-render)
+  - Unsaved changes warning when navigating away from an article
+  - Two-column layout for label form fields (better space use)
+  - Responsive layout: article sidebar hidden on narrow screens, main panel always visible
+- `R/export.R` — Updated with:
+  - `unnest_labels()` handles nested label groups (groups within groups) with Cartesian row expansion
+- `R/utils.R` — Updated with:
+  - `build_label_schema_json()` — exports label schema with definitions
+  - `import_label_schema()` — imports JSON schema and creates labels in DB
+- `www/custom.css` — Updated with multi-column review layout CSS, responsive breakpoints
+
+**Implementation notes:**
+- **Value-level definitions** are stored as a JSON string in the `instructions` field of each label. The format is: `{"label_def": "The definition...", "value_defs": {"Value1": "Definition 1", "Value2": "Definition 2"}}`. For labels without value definitions, `instructions` remains a plain text string (backward compatible).
+- **Tooltip rendering** in the Review tab uses `tooltip_icon_rich()` helper which builds HTML content including the label definition and a styled list of value definitions. Bootstrap popovers (not tooltips) are used for rich HTML content.
+- **Data preservation on add/remove instance**: Before re-rendering the group form, `.collect_values()` is called to snapshot current input values into `current_meta()`. The re-render then restores values from this snapshot.
+- **Unsaved changes detection**: A `dirty` reactiveVal is set TRUE whenever an input changes after article load. Navigating to another article or away from the review tab triggers a confirmation modal if `dirty()` is TRUE.
+- **Two-column label layout**: Labels are rendered in a Bootstrap `row` with two `col-md-6` columns. Effect size labels and label groups span the full width.
+- **Responsive sidebar**: CSS media query `@media (max-width: 992px)` hides `.col-lg-3` (article list) and expands `.col-lg-9` to full width. A toggle button appears to show/hide the sidebar.
+- **Label schema export** produces JSON matching the example format with `definition` (from label instructions) and value-level `definition` entries.
+- **Label schema import** parses the JSON, creates groups first (to get UUIDs), then single/child labels with remapped parent IDs.
+
+**Pre-flight:** No new SQL required — all features use existing `labels`, `instructions`, and `allowed_values` columns.
+
+**Validation Gate 13:**
+
+### Gate 13A — Value-Level Definitions
+
+1. Open the app and navigate to a project's **Labels** tab.
+2. Add a new label with type `select one`. Enter display name "Habitat Type", allowed values: `Forest`, `Grassland`, `Wetland`.
+3. In the Instructions field, type a label definition like "The primary habitat type of the study site".
+4. **New feature check:** Below the allowed values, you should see a **"Value Definitions"** section with one text input per allowed value. Enter definitions:
+   - Forest: "Temperate or tropical forest ecosystem"
+   - Grassland: "Open grass-dominated landscape"
+   - Wetland: "Water-saturated ecosystem"
+5. Click Save.
+6. **Check:** Reload the page. Edit the same label. All value definitions should persist.
+
+**Pass criteria:** Value definitions save and reload correctly for `select one` and `select multiple` label types.
+[x] Gate Passed
+
 ---
 
-## Phase 13: Run in a docker container
+### Gate 13B — Tooltip Display in Review Tab
+
+1. Navigate to the **Review** tab. Select an article.
+2. Find the "Habitat Type" label you created in Gate 13A.
+3. **Check:** A ❓ icon should appear next to the label name.
+4. Click the ❓ icon.
+5. **Check:** A popover/tooltip should appear showing:
+   - The label definition: "The primary habitat type of the study site"
+   - Value definitions listed below:
+     - **Forest:** Temperate or tropical forest ecosystem
+     - **Grassland:** Open grass-dominated landscape
+     - **Wetland:** Water-saturated ecosystem
+6. Click outside the popover to dismiss it.
+7. **Check:** Labels inside label groups also show ❓ icons with their instructions.
+
+**Pass criteria:** All labels with definitions (including children in groups) show clickable ❓ icons with rich tooltips containing both label and value definitions.
+
+[x] In progress:  icon displayed for normal labels, but nothing happens when icon is clicked. No icons display at all when a label is a child label in a label group
+---
+
+### Gate 13C — Label Schema Export
+
+1. Go to the **Labels** tab. Ensure you have at least 2 labels (one `select one` with value definitions, one `text` without).
+2. Click the **"Export Schema"** button in the toolbar.
+3. **Check:** A JSON file downloads. Open it in a text editor.
+4. **Check:** The JSON structure should look like:
+   ```json
+   {
+     "habitat_type": {
+       "type": "select one",
+       "display": "Habitat Type",
+       "mandatory": false,
+       "definition": "The primary habitat type of the study site",
+       "values": [
+         { "value": "Forest", "definition": "Temperate or tropical forest ecosystem" },
+         { "value": "Grassland", "definition": "Open grass-dominated landscape" },
+         { "value": "Wetland", "definition": "Water-saturated ecosystem" }
+       ]
+     }
+   }
+   ```
+5. **Check:** Labels without value definitions have a plain `"definition"` field (or none if empty). Label groups appear as `"type": "group"` with their child labels under `"items"`.
+
+**Pass criteria:** Exported JSON has correct structure with definitions at both label and value level.
+
+[x] Gate Passed
+---
+
+### Gate 13D — Label Schema Import
+
+1. Create a new blank project (no labels).
+2. Go to the **Labels** tab. Click **"Import Schema"**.
+3. Select the JSON file exported in Gate 13C (or create a test JSON file).
+4. **Check:** After import, the labels list shows all labels from the JSON, including groups with children.
+5. **Check:** Edit one of the imported labels — the definition and value definitions should be populated.
+6. Go to the **Review** tab. Upload some articles. Select one.
+7. **Check:** All imported labels render correctly in the review form (correct types, allowed values, tooltips).
+
+**Pass criteria:** Imported labels are fully functional — correct types, allowed values, definitions, group/child structure.
+
+[x] Gate Passed
+---
+
+### Gate 13E — Data Preservation on Add Instance
+
+1. Go to the **Review** tab. Select an article.
+2. Find a label group (e.g. "Study Site") with at least one instance.
+3. Fill in values for Instance 1 (text, select, etc.).
+4. **Without clicking Save**, click **"+ Add Instance"**.
+5. **Check:** Instance 1's values should still be visible and unchanged (NOT erased).
+6. Fill in Instance 2 with different values.
+7. Click **"Remove"** on Instance 2.
+8. **Check:** Instance 1's values remain intact.
+9. Now click Save.
+10. **Check:** Data persists correctly after save.
+
+**Pass criteria:** Adding or removing group instances never erases data entered in other instances.
+
+[x] Gate passed
+---
+
+### Gate 13F — Unsaved Changes Warning
+
+1. Review tab: select an article. Change a label value (type text in a field).
+2. **Without saving**, click a different article in the sidebar.
+3. **Check:** A confirmation dialog/modal appears: "You have unsaved changes. Discard and continue, or go back to save?"
+4. Click "Go back" — you remain on the current article with your unsaved changes.
+5. Make a change again, click another article, and this time click "Discard".
+6. **Check:** Navigation proceeds to the new article. The unsaved data is lost (expected).
+
+**Pass criteria:** Unsaved changes trigger a warning. "Go back" preserves data; "Discard" navigates away.
+
+[x] Gate passed
+---
+
+### Gate 13G — Two-Column Review Layout
+
+1. Review tab: select an article with many labels.
+2. **Check:** Single/simple labels (text, numeric, select, boolean, date) are arranged in two columns side by side, not stacked vertically.
+3. **Check:** Label groups and effect_size labels span the full width (not squeezed into a column).
+4. **Check:** On a narrow screen or split-screen (< 992px), the article sidebar disappears and the main review panel takes full width.
+5. **Check:** A small toggle button appears (e.g., hamburger icon) to show/hide the article list when in narrow mode.
+
+**Pass criteria:** Two-column layout works for simple fields. Groups span full width. Sidebar hides on narrow screens with a toggle.
+
+[x] Gate passed
+---
+
+**All gates passed when:** Gates 13A + 13B + 13C + 13D + 13E + 13F + 13G all pass.
+
+**Status:** [ ] Not started  [ ] In progress  [ ] Gate passed
+
+---
+
+## Last Phase: Run in a docker container
 
 **Branch:** `phase-13-docker`
 

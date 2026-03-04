@@ -84,16 +84,24 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
       }
     })
 
-    # ── Toolbar (Add Label / Add Label Group) ────────────────
+    # ── Toolbar (Add Label / Add Label Group / Export / Import) ─
     output$toolbar_ui <- renderUI({
       req(isTRUE(is_owner()))
-      div(class = "d-flex gap-2 mb-3",
+      div(class = "d-flex gap-2 mb-3 flex-wrap",
         actionButton(ns("btn_add_label"),
                      tagList(icon("plus"), " Add Label"),
                      class = "btn btn-primary btn-sm"),
         actionButton(ns("btn_add_group"),
                      tagList(icon("layer-group"), " Add Label Group"),
-                     class = "btn btn-outline-primary btn-sm")
+                     class = "btn btn-outline-primary btn-sm"),
+        downloadButton(ns("btn_export_schema"),
+                       tagList(icon("download"), " Export Schema"),
+                       class = "btn btn-outline-secondary btn-sm ms-auto"),
+        fileInput(ns("import_schema_file"), label = NULL,
+                  accept = ".json",
+                  buttonLabel = tagList(icon("upload"), " Import Schema"),
+                  placeholder = "No file",
+                  width = "220px")
       )
     })
 
@@ -197,6 +205,35 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
     })
 
     # ══════════════════════════════════════════════════════════
+    # EXPORT / IMPORT SCHEMA
+    # ══════════════════════════════════════════════════════════
+
+    output$btn_export_schema <- downloadHandler(
+      filename = function() {
+        paste0("label_schema_", format(Sys.Date(), "%Y%m%d"), ".json")
+      },
+      content = function(file) {
+        df <- labels_df()
+        json <- build_label_schema_export(df)
+        writeLines(json, file)
+      }
+    )
+
+    observeEvent(input$import_schema_file, {
+      req(input$import_schema_file)
+      fpath <- input$import_schema_file$datapath
+      tryCatch({
+        json_text <- paste(readLines(fpath, warn = FALSE), collapse = "\n")
+        pid <- project_id()
+        import_label_schema(json_text, pid, session_rv$token)
+        labels_refresh(labels_refresh() + 1)
+        showNotification("Label schema imported successfully.", type = "message")
+      }, error = function(e) {
+        showNotification(paste("Import failed:", e$message), type = "error")
+      })
+    })
+
+    # ══════════════════════════════════════════════════════════
     # ADD / EDIT LABEL MODAL
     # ══════════════════════════════════════════════════════════
 
@@ -250,8 +287,42 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
       category     <- trimws(input$lbl_category     %||% "")
       vtype        <- input$lbl_variable_type       %||% "text"
       mandatory    <- isTRUE(input$lbl_mandatory)
-      instructions <- trimws(input$lbl_instructions %||% "")
+      label_def    <- trimws(input$lbl_instructions %||% "")
       allowed_raw  <- trimws(input$lbl_allowed_values %||% "")
+
+      if (nchar(dname) == 0 || nchar(mname) == 0) {
+        showNotification("Display name and machine name are required.",
+                         type = "warning")
+        return()
+      }
+      if (!grepl("^[a-z0-9_]+$", mname)) {
+        showNotification(
+          "Machine name may only contain lowercase letters, digits, and underscores.",
+          type = "warning")
+        return()
+      }
+
+      allowed_values <- if (vtype %in% c("select one", "select multiple") &&
+                            nchar(allowed_raw) > 0) {
+        trimws(unlist(strsplit(allowed_raw, "\n")))
+      } else {
+        character(0)
+      }
+
+      # Build structured instructions with value definitions
+      instructions <- label_def
+      if (vtype %in% c("select one", "select multiple") &&
+          length(allowed_values) > 0) {
+        value_defs <- list()
+        for (av in allowed_values) {
+          vdef <- trimws(input[[paste0("lbl_valdef_", gsub("[^a-zA-Z0-9]", "_", av))]] %||% "")
+          if (nchar(vdef) > 0) value_defs[[av]] <- vdef
+        }
+        if (length(value_defs) > 0 || nchar(label_def) > 0) {
+          instr_obj <- list(label_def = label_def, value_defs = value_defs)
+          instructions <- jsonlite::toJSON(instr_obj, auto_unbox = TRUE)
+        }
+      }
 
       if (nchar(dname) == 0 || nchar(mname) == 0) {
         showNotification("Display name and machine name are required.",
@@ -636,11 +707,51 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
 
   # Reconstruct allowed_values string for editing
   av_str <- ""
+  av_vec <- character(0)
   if (is_edit) {
     av <- label_row$allowed_values
     if (!is.null(av) && length(av) > 0 && !all(is.na(av))) {
-      av_str <- paste(unlist(av), collapse = "\n")
+      av_vec <- unlist(av)
+      av_str <- paste(av_vec, collapse = "\n")
     }
+  }
+
+  # Parse structured instructions (label_def + value_defs)
+  instr_text <- ""
+  value_defs <- list()
+  if (is_edit && !is.na(label_row$instructions) &&
+      nchar(label_row$instructions) > 0) {
+    parsed <- tryCatch(
+      jsonlite::fromJSON(label_row$instructions, simplifyVector = FALSE),
+      error = function(e) NULL
+    )
+    if (is.list(parsed) && !is.null(parsed$label_def)) {
+      instr_text <- parsed$label_def %||% ""
+      value_defs <- parsed$value_defs %||% list()
+    } else {
+      # Plain text instructions (backward compat)
+      instr_text <- label_row$instructions
+    }
+  }
+
+  # Build value definition inputs for existing allowed values
+  val_def_ui <- NULL
+  if (is_edit && label_row$variable_type %in% c("select one", "select multiple") &&
+      length(av_vec) > 0) {
+    val_def_ui <- div(id = ns("value_defs_container"),
+      class = "mt-3 p-2 border rounded bg-light",
+      h6(class = "fw-semibold mb-2", icon("book"), " Value Definitions"),
+      p(class = "text-muted small mb-2",
+        "Optional: define each allowed value for reviewer guidance."),
+      tagList(lapply(av_vec, function(v) {
+        safe_id <- gsub("[^a-zA-Z0-9]", "_", v)
+        existing_def <- value_defs[[v]] %||% ""
+        textInput(ns(paste0("lbl_valdef_", safe_id)),
+                  label = v,
+                  value = existing_def,
+                  placeholder = paste0("Definition for '", v, "'"))
+      }))
+    )
   }
 
   showModal(modalDialog(
@@ -702,11 +813,11 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
         checkboxInput(ns("lbl_mandatory"), "Mandatory",
                       value = if (is_edit && !is.na(label_row$mandatory))
                                 isTRUE(label_row$mandatory) else FALSE),
-        textAreaInput(ns("lbl_instructions"), "Instructions / Tooltip",
-                      value = if (is_edit && !is.na(label_row$instructions))
-                                label_row$instructions else "",
+        textAreaInput(ns("lbl_instructions"), "Label Definition / Tooltip",
+                      value = instr_text,
                       rows  = 3,
-                      placeholder = "Guidance text shown to reviewer on hover")
+                      placeholder = "Guidance text shown to reviewer on hover"),
+        val_def_ui
       )
     )
   ))
@@ -743,7 +854,33 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
   kids_df <- df[ has_parent, , drop = FALSE]
   top_df  <- top_df[order(top_df$order_index), , drop = FALSE]
 
-  schema <- list()
+  .parse_instr <- function(instr) {
+    if (is.na(instr) || nchar(instr) == 0) return(list(label_def = "", value_defs = list()))
+    parsed <- tryCatch(jsonlite::fromJSON(instr, simplifyVector = FALSE), error = function(e) NULL)
+    if (is.list(parsed) && !is.null(parsed$label_def)) return(parsed)
+    list(label_def = instr, value_defs = list())
+  }
+
+  .build_entry <- function(row) {
+    entry <- list(type = row$variable_type, display = row$display_name)
+    if (isTRUE(row$mandatory)) entry$mandatory <- TRUE
+    instr <- .parse_instr(row$instructions)
+    if (nchar(instr$label_def) > 0) entry$definition <- instr$label_def
+    av <- row$allowed_values
+    if (is.list(av)) av <- unlist(av)
+    if (!is.null(av) && length(av) > 0 && !all(is.na(av))) {
+      vals <- lapply(av, function(v) {
+        obj <- list(value = v)
+        vd <- instr$value_defs[[v]]
+        if (!is.null(vd) && nchar(vd) > 0) obj$definition <- vd
+        obj
+      })
+      entry$values <- vals
+    }
+    entry
+  }
+
+schema <- list()
 
   for (i in seq_len(nrow(top_df))) {
     row  <- top_df[i, ]
@@ -759,29 +896,20 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
       for (j in seq_len(nrow(gc))) {
         ckey <- gc$name[j]
         if (is.na(ckey) || nchar(ckey) == 0) next
-        entry <- list(type = gc$variable_type[j],
-                      display = gc$display_name[j])
-        if (isTRUE(gc$mandatory[j])) entry$mandatory <- TRUE
-        av <- gc$allowed_values[[j]]
-        if (!is.null(av) && length(av) > 0 && !all(is.na(av)))
-          entry$values <- av
-        child_schema[[ckey]] <- entry
+        child_schema[[ckey]] <- .build_entry(gc[j, ])
       }
 
-      schema[[key]] <- list(
+      grp_entry <- list(
         type    = "group",
         display = row$display_name,
-        note    = "Stored as JSON array; each article may have multiple instances",
-        items   = child_schema
+        note    = "Stored as JSON array; each article may have multiple instances"
       )
+      grp_instr <- .parse_instr(row$instructions)
+      if (nchar(grp_instr$label_def) > 0) grp_entry$definition <- grp_instr$label_def
+      grp_entry$items <- child_schema
+      schema[[key]] <- grp_entry
     } else {
-      entry <- list(type    = row$variable_type,
-                    display = row$display_name)
-      if (isTRUE(row$mandatory)) entry$mandatory <- TRUE
-      av <- row$allowed_values[[1]]
-      if (!is.null(av) && length(av) > 0 && !all(is.na(av)))
-        entry$values <- av
-      schema[[key]] <- entry
+      schema[[key]] <- .build_entry(row)
     }
   }
 
