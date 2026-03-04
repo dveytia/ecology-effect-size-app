@@ -4,6 +4,8 @@
 // Each icon carries data-bs-trigger="click" so the tooltip opens/closes on
 // click rather than hover.  Clicking anywhere outside an open tooltip
 // dismisses it.
+//
+// Popovers are handled natively by bslib::popover() — no JS needed here.
 
 // Initialise all Bootstrap tooltips present in the DOM
 function initTooltips() {
@@ -13,15 +15,12 @@ function initTooltips() {
   tooltipTriggerList.forEach(function (el) {
     // Avoid double-initialisation
     if (!bootstrap.Tooltip.getInstance(el)) {
-      // Respect the per-element data-bs-trigger attribute (defaults to click
-      // for tooltip-icon elements; Bootstrap reads it automatically when no
-      // explicit override is provided here).
       new bootstrap.Tooltip(el);
     }
   });
 }
 
-// Dismiss any open click-triggered tooltip when the user clicks outside it
+// Dismiss any open click-triggered tooltip when the user clicks outside
 document.addEventListener('click', function (e) {
   document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
     var instance = bootstrap.Tooltip.getInstance(el);

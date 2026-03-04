@@ -197,6 +197,7 @@ unnest_labels <- function(metadata_df, label_schema) {
 
   # Normalise columns that may arrive as list-columns (JSONB NULL → list element)
   # Coerce to plain character vectors so == and is.na() behave predictably.
+
   safe_char <- function(x) {
     if (is.list(x)) {
       vapply(x, function(v) if (is.null(v) || (length(v) == 1 && is.na(v))) NA_character_ else as.character(v[[1]]), character(1))
@@ -208,15 +209,94 @@ unnest_labels <- function(metadata_df, label_schema) {
   label_schema$parent_label_id <- safe_char(label_schema$parent_label_id)
   label_schema$variable_type   <- safe_char(label_schema$variable_type)
   label_schema$name            <- safe_char(label_schema$name)
+  label_schema$label_id        <- safe_char(label_schema$label_id)
 
   # Helper: TRUE if parent_label_id is absent (NA or empty string)
   no_parent <- is.na(label_schema$parent_label_id) |
                label_schema$parent_label_id == "" |
                label_schema$parent_label_id == "NA"
 
-  # Separate top-level (single) labels and group labels
-  top_labels  <- label_schema[label_schema$label_type %in% "single" & no_parent, ]
-  group_parents <- label_schema[label_schema$label_type %in% "group"  & no_parent, ]
+  # ---- Recursive expansion helper ----
+  # Given a JSON context (top-level jd or a group instance) and the labels
+
+  # at this nesting level, return a list of "row fragments".  Each fragment
+  # is a list with: vals (named list of column values), group_name,
+  # group_instance, group_instance_id.
+  .expand <- function(jd_ctx, labels_here, prefix) {
+    singles <- labels_here[labels_here$label_type %in% "single", ]
+    groups  <- labels_here[labels_here$label_type %in% "group",  ]
+
+    # Collect single-label values at this level
+    single_vals <- list()
+    for (j in seq_len(nrow(singles))) {
+      nm <- singles$name[j]
+      vt <- singles$variable_type[j]
+      if (is.na(nm)) next
+      if (!is.na(vt) && vt %in% "effect_size") next
+      single_vals[[nm]] <- .flatten_value(jd_ctx[[nm]])
+    }
+
+    if (nrow(groups) == 0) {
+      # Leaf level — no groups, just return the single values
+      return(list(list(vals = single_vals,
+                       group_name = NA_character_,
+                       group_instance = NA_integer_,
+                       group_instance_id = NA_character_)))
+    }
+
+    all_frags <- list()
+    for (g in seq_len(nrow(groups))) {
+      gname <- groups$name[g]
+      gid   <- groups$label_id[g]
+      if (is.na(gname) || is.na(gid)) next
+
+      g_children <- label_schema[!is.na(label_schema$parent_label_id) &
+                                  label_schema$parent_label_id == gid, ]
+      instances  <- jd_ctx[[gname]]
+
+      if (is.list(instances) && length(instances) > 0) {
+        for (inst_num in seq_along(instances)) {
+          inst <- instances[[inst_num]]
+          key  <- if (nzchar(prefix)) paste0(prefix, "__", gname, "_", inst_num)
+                  else paste0(gname, "_", inst_num)
+
+          # Recurse into group instance children
+          sub_frags <- .expand(inst, g_children, key)
+
+          for (sf in sub_frags) {
+            merged_vals <- c(single_vals, sf$vals)
+            # Use deepest nested group info if present, otherwise this group
+            if (!is.na(sf$group_instance_id)) {
+              all_frags <- c(all_frags, list(list(
+                vals              = merged_vals,
+                group_name        = sf$group_name,
+                group_instance    = sf$group_instance,
+                group_instance_id = sf$group_instance_id)))
+            } else {
+              all_frags <- c(all_frags, list(list(
+                vals              = merged_vals,
+                group_name        = gname,
+                group_instance    = inst_num,
+                group_instance_id = key)))
+            }
+          }
+        }
+      }
+    }
+
+    if (length(all_frags) == 0) {
+      # No instances found for any group at this level
+      return(list(list(vals = single_vals,
+                       group_name = NA_character_,
+                       group_instance = NA_integer_,
+                       group_instance_id = NA_character_)))
+    }
+
+    all_frags
+  }
+
+  # Top-level labels
+  top_level <- label_schema[no_parent, ]
 
   # Build result row by row
   all_rows <- list()
@@ -228,67 +308,16 @@ unnest_labels <- function(metadata_df, label_schema) {
     raw_jd <- tryCatch(metadata_df$json_data[[i]], error = function(e) NULL)
     jd  <- .parse_json_data(raw_jd)
 
-    # Extract top-level (single) label values
-    base_row <- list(article_id = aid)
-    for (j in seq_len(nrow(top_labels))) {
-      lbl_name <- top_labels$name[j]
-      var_type <- top_labels$variable_type[j]
-      # Skip rows where name is NA (should not happen after safe_char, but be safe)
-      if (is.na(lbl_name)) next
-      val      <- jd[[lbl_name]]
-      # Skip effect_size type labels — they are in the effect_sizes table
-      if (!is.na(var_type) && var_type %in% "effect_size") next
-      base_row[[lbl_name]] <- .flatten_value(val)
-    }
+    # Expand recursively (handles singles + nested groups at all depths)
+    frags <- .expand(jd, top_level, "")
 
-    # If there are group parents, expand instances
-    if (nrow(group_parents) > 0) {
-      has_any_instances <- FALSE
-
-      for (g in seq_len(nrow(group_parents))) {
-        grp_name <- group_parents$name[g]
-        grp_id   <- group_parents$label_id[g]
-        if (is.na(grp_name) || is.na(grp_id)) next
-        child_labels <- label_schema[!is.na(label_schema$parent_label_id) &
-                                      label_schema$parent_label_id %in% grp_id, ]
-        instances <- jd[[grp_name]]
-
-        if (is.list(instances) && length(instances) > 0) {
-          for (inst_num in seq_along(instances)) {
-            inst <- instances[[inst_num]]
-            inst_row <- base_row
-            inst_row[["group_name"]]        <- grp_name
-            inst_row[["group_instance"]]    <- inst_num
-            inst_row[["group_instance_id"]] <- paste0(grp_name, "_", inst_num)
-
-            for (cl in seq_len(nrow(child_labels))) {
-              cl_name  <- child_labels$name[cl]
-              cl_type  <- child_labels$variable_type[cl]
-              if (is.na(cl_name)) next
-              if (!is.na(cl_type) && cl_type %in% "effect_size") next
-              inst_row[[cl_name]] <- .flatten_value(inst[[cl_name]])
-            }
-
-            row_idx <- row_idx + 1L
-            all_rows[[row_idx]] <- inst_row
-            has_any_instances <- TRUE
-          }
-        }
-      }
-
-      # If no group instances exist, still emit the base row
-      if (!has_any_instances) {
-        base_row[["group_name"]]        <- NA_character_
-        base_row[["group_instance"]]    <- NA_integer_
-        base_row[["group_instance_id"]] <- NA_character_
-        row_idx <- row_idx + 1L
-        all_rows[[row_idx]] <- base_row
-      }
-    } else {
-      # No groups — just the base row
-      base_row[["group_instance_id"]] <- NA_character_
+    for (frag in frags) {
+      row <- c(list(article_id = aid), frag$vals)
+      row[["group_name"]]        <- frag$group_name
+      row[["group_instance"]]    <- frag$group_instance
+      row[["group_instance_id"]] <- frag$group_instance_id
       row_idx <- row_idx + 1L
-      all_rows[[row_idx]] <- base_row
+      all_rows[[row_idx]] <- row
     }
   }
 
@@ -596,6 +625,31 @@ build_full_export <- function(project_id, filters = list(), token = NULL) {
     merged$location_osm <- sub(";\\s*[Pp]olygon;.*$", "", merged$location_osm,
                                 perl = TRUE)
     merged$location_osm <- trimws(merged$location_osm)
+  }
+
+  # Coerce any remaining list-columns to character so writexl can handle them.
+  for (col in names(merged)) {
+    if (is.list(merged[[col]])) {
+      merged[[col]] <- vapply(merged[[col]], function(v) {
+        if (is.null(v) || (length(v) == 1 && is.na(v))) NA_character_
+        else paste(as.character(unlist(v)), collapse = "; ")
+      }, character(1))
+    }
+  }
+
+  # Truncate strings exceeding Excel's 32767 character cell limit.
+  # Without this, writexl/libxlsxwriter throws a fatal error.
+  EXCEL_MAX <- 32767L
+  for (col in names(merged)) {
+    if (is.character(merged[[col]])) {
+      long <- which(!is.na(merged[[col]]) & nchar(merged[[col]]) > EXCEL_MAX)
+      if (length(long) > 0) {
+        message(sprintf("[build_full_export] Truncating %d value(s) in '%s' to Excel's 32767-char limit",
+                        length(long), col))
+        merged[[col]][long] <- paste0(substr(merged[[col]][long], 1, EXCEL_MAX - 15),
+                                       "...[TRUNCATED]")
+      }
+    }
   }
 
   # Reset row names

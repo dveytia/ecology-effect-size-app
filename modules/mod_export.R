@@ -215,15 +215,26 @@ mod_export_server <- function(id, project_id, session_rv) {
       },
       content = function(file) {
         pid <- project_id()
-        req(pid, session_rv$token)
+        tok <- session_rv$token
+        if (is.null(pid) || is.null(tok)) {
+          writexl::write_xlsx(data.frame(error = "Session expired. Please log in again."), file)
+          return(invisible(NULL))
+        }
         df <- tryCatch(
-          build_full_export(pid, .current_filters(), session_rv$token),
+          build_full_export(pid, .current_filters(), tok),
           error = function(e) {
+            message("[dl_full] export error: ", e$message)
             showNotification(paste("Export error:", e$message), type = "error")
-            data.frame()
+            data.frame(error = paste("Export failed:", e$message))
           }
         )
-        writexl::write_xlsx(df, file)
+        # Write to a temp .xlsx first, then copy to the Shiny-provided path.
+        # This avoids corruption from Shiny Server's temp-file handling
+        # which can mangle binary content when the temp file has no extension.
+        tmp <- tempfile(fileext = ".xlsx")
+        on.exit(unlink(tmp), add = TRUE)
+        writexl::write_xlsx(df, tmp)
+        file.copy(tmp, file, overwrite = TRUE)
       },
       contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
@@ -235,10 +246,15 @@ mod_export_server <- function(id, project_id, session_rv) {
       },
       content = function(file) {
         pid <- project_id()
-        req(pid, session_rv$token)
+        tok <- session_rv$token
+        if (is.null(pid) || is.null(tok)) {
+          writexl::write_xlsx(data.frame(error = "Session expired. Please log in again."), file)
+          return(invisible(NULL))
+        }
         df <- tryCatch(
-          build_meta_export(pid, .current_filters(), session_rv$token),
+          build_meta_export(pid, .current_filters(), tok),
           error = function(e) {
+            message("[dl_meta] export error: ", e$message)
             showNotification(paste("Export error:", e$message), type = "error")
             data.frame()
           }
@@ -248,11 +264,13 @@ mod_export_server <- function(id, project_id, session_rv) {
             paste0("No rows with a computed effect size match the current filters.")
           showNotification(diag_msg, type = "warning", duration = 15)
         } else if (!is.null(attr(df, "meta_export_msg"))) {
-          # Show flag summary (some rows incomplete but export proceeds)
           showNotification(attr(df, "meta_export_msg"),
                            type = "warning", duration = 12)
         }
-        writexl::write_xlsx(df, file)
+        tmp <- tempfile(fileext = ".xlsx")
+        on.exit(unlink(tmp), add = TRUE)
+        writexl::write_xlsx(df, tmp)
+        file.copy(tmp, file, overwrite = TRUE)
       },
       contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
@@ -264,7 +282,11 @@ mod_export_server <- function(id, project_id, session_rv) {
       },
       content = function(file) {
         pid <- project_id()
-        req(pid, session_rv$token)
+        tok <- session_rv$token
+        if (is.null(pid) || is.null(tok)) {
+          writeLines("[]", file)
+          return(invisible(NULL))
+        }
         json_str <- tryCatch(
           build_json_export(pid, .current_filters(), session_rv$token),
           error = function(e) {

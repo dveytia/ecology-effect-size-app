@@ -84,16 +84,24 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
       }
     })
 
-    # ── Toolbar (Add Label / Add Label Group) ────────────────
+    # ── Toolbar (Add Label / Add Label Group / Export / Import) ─
     output$toolbar_ui <- renderUI({
       req(isTRUE(is_owner()))
-      div(class = "d-flex gap-2 mb-3",
+      div(class = "d-flex gap-2 mb-3 flex-wrap",
         actionButton(ns("btn_add_label"),
                      tagList(icon("plus"), " Add Label"),
                      class = "btn btn-primary btn-sm"),
         actionButton(ns("btn_add_group"),
                      tagList(icon("layer-group"), " Add Label Group"),
-                     class = "btn btn-outline-primary btn-sm")
+                     class = "btn btn-outline-primary btn-sm"),
+        downloadButton(ns("btn_export_schema"),
+                       tagList(icon("download"), " Export Schema"),
+                       class = "btn btn-outline-secondary btn-sm ms-auto"),
+        fileInput(ns("import_schema_file"), label = NULL,
+                  accept = ".json",
+                  buttonLabel = tagList(icon("upload"), " Import Schema"),
+                  placeholder = "No file",
+                  width = "220px")
       )
     })
 
@@ -118,48 +126,14 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
       # Split top-level vs children
       has_parent <- !is.na(df$parent_label_id) & nchar(df$parent_label_id) > 0
       top_df  <- df[!has_parent, , drop = FALSE]
-      kids_df <- df[ has_parent, , drop = FALSE]
+      top_df  <- top_df[order(top_df$order_index), , drop = FALSE]
 
       tagList(
         lapply(seq_len(nrow(top_df)), function(i) {
           row <- top_df[i, ]
 
           if (row$label_type == "group") {
-            gc <- kids_df[!is.na(kids_df$parent_label_id) &
-                            kids_df$parent_label_id == row$label_id, , drop = FALSE]
-            gc <- gc[order(gc$order_index), , drop = FALSE]
-
-            div(class = "card mb-2 border-primary",
-              div(class = "card-header bg-primary bg-opacity-10 d-flex align-items-center gap-1",
-                span(class = "me-auto fw-bold",
-                  icon("layer-group", class = "me-1 text-primary"),
-                  row$display_name,
-                  span(class = "badge bg-primary ms-1 fw-normal", "GROUP"),
-                  if (!is.na(row$category) && nchar(row$category) > 0)
-                    span(class = "badge bg-secondary ms-1 fw-normal small",
-                         row$category)
-                ),
-                .lbl_reorder_btns(ns, row$label_id, i, nrow(top_df)),
-                .lbl_action_btns(ns, row$label_id, owner)
-              ),
-              div(class = "card-body py-2",
-                if (nrow(gc) > 0)
-                  tagList(lapply(seq_len(nrow(gc)), function(j) {
-                    .lbl_row_card(ns, gc[j, ], j, nrow(gc),
-                                  is_child = TRUE, owner = owner)
-                  })),
-                if (owner)
-                  div(class = "mt-1",
-                    tags$button(
-                      class   = "btn btn-outline-primary btn-sm",
-                      onclick = sprintf(
-                        'Shiny.setInputValue("%s", "%s", {priority:"event"})',
-                        ns("add_child_to_group"), row$label_id),
-                      tagList(icon("plus"), " Add Child Label")
-                    )
-                  )
-              )
-            )
+            .render_group_card(ns, df, row, i, nrow(top_df), owner, depth = 0)
           } else {
             .lbl_row_card(ns, row, i, nrow(top_df),
                           is_child = FALSE, owner = owner)
@@ -197,16 +171,77 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
     })
 
     # ══════════════════════════════════════════════════════════
+    # EXPORT / IMPORT SCHEMA
+    # ══════════════════════════════════════════════════════════
+
+    output$btn_export_schema <- downloadHandler(
+      filename = function() {
+        paste0("label_schema_", format(Sys.Date(), "%Y%m%d"), ".json")
+      },
+      content = function(file) {
+        df <- labels_df()
+        json <- build_label_schema_export(df)
+        writeLines(json, file)
+      }
+    )
+
+    observeEvent(input$import_schema_file, {
+      req(input$import_schema_file)
+      fpath <- input$import_schema_file$datapath
+      tryCatch({
+        json_text <- paste(readLines(fpath, warn = FALSE), collapse = "\n")
+        pid <- project_id()
+        import_label_schema(json_text, pid, session_rv$token)
+        labels_refresh(labels_refresh() + 1)
+        showNotification("Label schema imported successfully.", type = "message")
+      }, error = function(e) {
+        showNotification(paste("Import failed:", e$message), type = "error")
+      })
+    })
+
+    # ══════════════════════════════════════════════════════════
     # ADD / EDIT LABEL MODAL
     # ══════════════════════════════════════════════════════════
 
-    editing_label_id  <- reactiveVal(NULL)
-    adding_to_group   <- reactiveVal(NULL)   # group UUID or NULL
+    editing_label_id    <- reactiveVal(NULL)
+    adding_to_group    <- reactiveVal(NULL)   # group UUID or NULL
+    editing_value_defs <- reactiveVal(list()) # value-level definitions for dynamic UI
+
+    # Dynamic renderUI for value definitions (inside label modal)
+    output$value_defs_dynamic <- renderUI({
+      vtype   <- input$lbl_variable_type
+      av_text <- input$lbl_allowed_values
+      if (is.null(vtype)) return(NULL)
+      if (!(vtype %in% c("select one", "select multiple"))) return(NULL)
+      av_vec <- if (!is.null(av_text) && nchar(trimws(av_text)) > 0) {
+        v <- trimws(unlist(strsplit(av_text, "\n")))
+        v[nchar(v) > 0]
+      } else character(0)
+      if (length(av_vec) == 0) return(NULL)
+      existing <- editing_value_defs()
+      div(id = ns("value_defs_container"),
+        class = "mt-3 p-2 border rounded bg-light",
+        h6(class = "fw-semibold mb-2", icon("book"), " Value Definitions"),
+        p(class = "text-muted small mb-2",
+          "Optional: define each allowed value for reviewer guidance."),
+        tagList(lapply(av_vec, function(v) {
+          safe_id <- gsub("[^a-zA-Z0-9]", "_", v)
+          # Preserve user-typed defs if the input already exists
+          current_val <- isolate(input[[paste0("lbl_valdef_", safe_id)]])
+          def_val <- if (!is.null(current_val)) current_val else (existing[[v]] %||% "")
+          textInput(ns(paste0("lbl_valdef_", safe_id)),
+                    label = v,
+                    value = def_val,
+                    placeholder = paste0("Definition for '", v, "'"))
+        }))
+      )
+    })
 
     # ---- Open modal for new label ---------------------------
     observeEvent(input$btn_add_label, {
       editing_label_id(NULL)
       adding_to_group(NULL)
+      editing_value_defs(list())
       .show_label_modal(ns       = ns,
                         mode     = "add",
                         input    = input,
@@ -219,6 +254,7 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
       req(gid)
       editing_label_id(NULL)
       adding_to_group(gid)
+      editing_value_defs(list())
       .show_label_modal(ns       = ns,
                         mode     = "add_child",
                         input    = input,
@@ -235,11 +271,22 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
       df  <- labels_df()
       row <- df[df$label_id == lid, , drop = FALSE]
       if (nrow(row) == 0) return()
+      row_list <- as.list(row[1, ])
+      # Parse value definitions for the dynamic renderUI
+      vd <- list()
+      if (!is.na(row_list$instructions) && nchar(row_list$instructions) > 0) {
+        parsed <- tryCatch(jsonlite::fromJSON(row_list$instructions,
+                                              simplifyVector = FALSE),
+                           error = function(e) NULL)
+        if (is.list(parsed) && !is.null(parsed$value_defs))
+          vd <- parsed$value_defs
+      }
+      editing_value_defs(vd)
       .show_label_modal(ns        = ns,
                         mode      = "edit",
                         input     = input,
                         groups    = .get_groups(df),
-                        label_row = as.list(row[1, ]))
+                        label_row = row_list)
     })
 
     # ---- Save label (insert or update) ----------------------
@@ -250,8 +297,42 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
       category     <- trimws(input$lbl_category     %||% "")
       vtype        <- input$lbl_variable_type       %||% "text"
       mandatory    <- isTRUE(input$lbl_mandatory)
-      instructions <- trimws(input$lbl_instructions %||% "")
+      label_def    <- trimws(input$lbl_instructions %||% "")
       allowed_raw  <- trimws(input$lbl_allowed_values %||% "")
+
+      if (nchar(dname) == 0 || nchar(mname) == 0) {
+        showNotification("Display name and machine name are required.",
+                         type = "warning")
+        return()
+      }
+      if (!grepl("^[a-z0-9_]+$", mname)) {
+        showNotification(
+          "Machine name may only contain lowercase letters, digits, and underscores.",
+          type = "warning")
+        return()
+      }
+
+      allowed_values <- if (vtype %in% c("select one", "select multiple") &&
+                            nchar(allowed_raw) > 0) {
+        trimws(unlist(strsplit(allowed_raw, "\n")))
+      } else {
+        character(0)
+      }
+
+      # Build structured instructions with value definitions
+      instructions <- label_def
+      if (vtype %in% c("select one", "select multiple") &&
+          length(allowed_values) > 0) {
+        value_defs <- list()
+        for (av in allowed_values) {
+          vdef <- trimws(input[[paste0("lbl_valdef_", gsub("[^a-zA-Z0-9]", "_", av))]] %||% "")
+          if (nchar(vdef) > 0) value_defs[[av]] <- vdef
+        }
+        if (length(value_defs) > 0 || nchar(label_def) > 0) {
+          instr_obj <- list(label_def = label_def, value_defs = value_defs)
+          instructions <- jsonlite::toJSON(instr_obj, auto_unbox = TRUE)
+        }
+      }
 
       if (nchar(dname) == 0 || nchar(mname) == 0) {
         showNotification("Display name and machine name are required.",
@@ -396,6 +477,91 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
     })
 
     # ══════════════════════════════════════════════════════════
+    # ADD SUB-GROUP (nested group inside another group)
+    # ══════════════════════════════════════════════════════════
+
+    adding_subgroup_to <- reactiveVal(NULL)
+
+    observeEvent(input$add_child_group_to_group, {
+      parent_gid <- input$add_child_group_to_group
+      req(parent_gid)
+      adding_subgroup_to(parent_gid)
+
+      df <- labels_df()
+      parent_row <- df[df$label_id == parent_gid, , drop = FALSE]
+      parent_name <- if (nrow(parent_row) > 0) parent_row$display_name[1] else "Group"
+
+      showModal(modalDialog(
+        title     = paste0("Add Sub-Group to '", parent_name, "'"),
+        size      = "m",
+        easyClose = TRUE,
+        footer    = tagList(
+          modalButton("Cancel"),
+          actionButton(ns("confirm_add_subgroup"), "Add Sub-Group",
+                       class = "btn btn-primary")
+        ),
+        textInput(ns("subgrp_display_name"), "Sub-Group Display Name *",
+                  placeholder = "e.g. Measurements"),
+        .auto_name_js(ns, "subgrp_display_name", "subgrp_name"),
+        textInput(ns("subgrp_name"), "Machine Name *",
+                  placeholder = "e.g. measurements"),
+        p(class = "text-muted small mt-n2 mb-2",
+          "Auto-derived from display name. No spaces."),
+        textAreaInput(ns("subgrp_instructions"), "Instructions / Tooltip",
+                      rows = 2,
+                      placeholder = "Guidance text shown to reviewer")
+      ))
+    })
+
+    observeEvent(input$confirm_add_subgroup, {
+      pid          <- project_id()
+      parent_gid   <- adding_subgroup_to()
+      req(parent_gid)
+      dname        <- trimws(input$subgrp_display_name %||% "")
+      mname        <- trimws(input$subgrp_name %||% "")
+      instructions <- trimws(input$subgrp_instructions %||% "")
+
+      if (nchar(dname) == 0 || nchar(mname) == 0) {
+        showNotification("Display name and machine name are required.",
+                         type = "warning")
+        return()
+      }
+      if (!grepl("^[a-z0-9_]+$", mname)) {
+        showNotification(
+          "Machine name: lowercase letters, digits, underscores only.",
+          type = "warning")
+        return()
+      }
+
+      df         <- labels_df()
+      next_order <- if (nrow(df) == 0) 1L else
+                    max(df$order_index, na.rm = TRUE) + 1L
+
+      body <- list(
+        project_id      = pid,
+        label_type      = "group",
+        parent_label_id = parent_gid,
+        name            = mname,
+        display_name    = dname,
+        variable_type   = "text",
+        mandatory       = FALSE,
+        order_index     = next_order
+      )
+      if (nchar(instructions) > 0) body$instructions <- instructions
+
+      tryCatch({
+        sb_post("labels", body, token = session_rv$token)
+        removeModal()
+        showNotification("Sub-group added.", type = "message")
+        adding_subgroup_to(NULL)
+        labels_refresh(labels_refresh() + 1)
+      }, error = function(e) {
+        showNotification(paste("Error adding sub-group:", e$message),
+                         type = "error")
+      })
+    })
+
+    # ══════════════════════════════════════════════════════════
     # DELETE LABEL
     # ══════════════════════════════════════════════════════════
 
@@ -449,14 +615,18 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
       row <- df[df$label_id == lid, , drop = FALSE]
 
       tryCatch({
-        # Delete children first (cascade should handle it, but be explicit)
-        if (nrow(row) > 0 && row$label_type[1] == "group") {
+        # Recursively delete all descendants (children, grandchildren, etc.)
+        .delete_descendants <- function(parent_id) {
           child_ids <- df$label_id[
-            !is.na(df$parent_label_id) & df$parent_label_id == lid
+            !is.na(df$parent_label_id) & df$parent_label_id == parent_id
           ]
           for (cid in child_ids) {
+            .delete_descendants(cid)   # depth-first
             sb_delete("labels", "label_id", cid, token = session_rv$token)
           }
+        }
+        if (nrow(row) > 0 && row$label_type[1] == "group") {
+          .delete_descendants(lid)
         }
         sb_delete("labels", "label_id", lid, token = session_rv$token)
         removeModal()
@@ -615,6 +785,68 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
   )
 }
 
+# ---- Recursive group card rendering -------------------------
+# Renders a group card (with its children — including nested sub-groups)
+.render_group_card <- function(ns, all_df, row, pos, total, owner, depth = 0) {
+  # Children of this group
+  gc <- all_df[!is.na(all_df$parent_label_id) &
+                 all_df$parent_label_id == row$label_id, , drop = FALSE]
+  gc <- gc[order(gc$order_index), , drop = FALSE]
+
+  border_class <- if (depth == 0) "border-primary" else "border-info"
+  bg_class     <- if (depth == 0) "bg-primary bg-opacity-10" else "bg-info bg-opacity-10"
+  icon_class   <- if (depth == 0) "text-primary" else "text-info"
+  badge_label  <- if (depth == 0) "GROUP" else "SUB-GROUP"
+  badge_class  <- if (depth == 0) "bg-primary" else "bg-info"
+
+  div(class = paste("card mb-2", border_class),
+    style = if (depth > 0) "margin-left: 1rem;" else NULL,
+    div(class = paste("card-header", bg_class, "d-flex align-items-center gap-1"),
+      span(class = "me-auto fw-bold",
+        icon("layer-group", class = paste("me-1", icon_class)),
+        row$display_name,
+        span(class = paste("badge ms-1 fw-normal", badge_class), badge_label),
+        if (!is.na(row$category) && nchar(row$category) > 0)
+          span(class = "badge bg-secondary ms-1 fw-normal small",
+               row$category)
+      ),
+      .lbl_reorder_btns(ns, row$label_id, pos, total),
+      .lbl_action_btns(ns, row$label_id, owner)
+    ),
+    div(class = "card-body py-2",
+      if (nrow(gc) > 0)
+        tagList(lapply(seq_len(nrow(gc)), function(j) {
+          child <- gc[j, ]
+          if (child$label_type == "group") {
+            # Recursively render nested sub-group
+            .render_group_card(ns, all_df, child, j, nrow(gc),
+                               owner, depth + 1)
+          } else {
+            .lbl_row_card(ns, child, j, nrow(gc),
+                          is_child = TRUE, owner = owner)
+          }
+        })),
+      if (owner)
+        div(class = "mt-1 d-flex gap-2",
+          tags$button(
+            class   = "btn btn-outline-primary btn-sm",
+            onclick = sprintf(
+              'Shiny.setInputValue("%s", "%s", {priority:"event"})',
+              ns("add_child_to_group"), row$label_id),
+            tagList(icon("plus"), " Add Child Label")
+          ),
+          tags$button(
+            class   = "btn btn-outline-info btn-sm",
+            onclick = sprintf(
+              'Shiny.setInputValue("%s", "%s", {priority:"event"})',
+              ns("add_child_group_to_group"), row$label_id),
+            tagList(icon("layer-group"), " Add Sub-Group")
+          )
+        )
+    )
+  )
+}
+
 # ---- Show Add / Edit label modal ----------------------------
 .show_label_modal <- function(ns, mode, input, groups,
                                label_row = NULL, group_id = NULL) {
@@ -636,12 +868,33 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
 
   # Reconstruct allowed_values string for editing
   av_str <- ""
+  av_vec <- character(0)
   if (is_edit) {
     av <- label_row$allowed_values
     if (!is.null(av) && length(av) > 0 && !all(is.na(av))) {
-      av_str <- paste(unlist(av), collapse = "\n")
+      av_vec <- unlist(av)
+      av_str <- paste(av_vec, collapse = "\n")
     }
   }
+
+  # Parse instructions — extract label_def text for the textAreaInput
+  instr_text <- ""
+  if (is_edit && !is.na(label_row$instructions) &&
+      nchar(label_row$instructions) > 0) {
+    parsed <- tryCatch(
+      jsonlite::fromJSON(label_row$instructions, simplifyVector = FALSE),
+      error = function(e) NULL
+    )
+    if (is.list(parsed) && !is.null(parsed$label_def)) {
+      instr_text <- parsed$label_def %||% ""
+    } else {
+      # Plain text instructions (backward compat)
+      instr_text <- label_row$instructions
+    }
+  }
+
+  # Value definitions rendered dynamically via output$value_defs_dynamic
+  val_def_ui <- uiOutput(ns("value_defs_dynamic"))
 
   showModal(modalDialog(
     title     = switch(mode,
@@ -702,11 +955,11 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
         checkboxInput(ns("lbl_mandatory"), "Mandatory",
                       value = if (is_edit && !is.na(label_row$mandatory))
                                 isTRUE(label_row$mandatory) else FALSE),
-        textAreaInput(ns("lbl_instructions"), "Instructions / Tooltip",
-                      value = if (is_edit && !is.na(label_row$instructions))
-                                label_row$instructions else "",
+        textAreaInput(ns("lbl_instructions"), "Label Definition / Tooltip",
+                      value = instr_text,
                       rows  = 3,
-                      placeholder = "Guidance text shown to reviewer on hover")
+                      placeholder = "Guidance text shown to reviewer on hover"),
+        val_def_ui
       )
     )
   ))
@@ -738,50 +991,76 @@ mod_label_builder_server <- function(id, project_id, session_rv) {
 .label_schema_json <- function(df) {
   if (!is.data.frame(df) || nrow(df) == 0) return("{}")
 
+  .parse_instr <- function(instr) {
+    if (is.na(instr) || nchar(instr) == 0) return(list(label_def = "", value_defs = list()))
+    parsed <- tryCatch(jsonlite::fromJSON(instr, simplifyVector = FALSE), error = function(e) NULL)
+    if (is.list(parsed) && !is.null(parsed$label_def)) return(parsed)
+    list(label_def = instr, value_defs = list())
+  }
+
+  .build_entry <- function(row) {
+    entry <- list(type = row$variable_type, display = row$display_name)
+    if (isTRUE(row$mandatory)) entry$mandatory <- TRUE
+    instr <- .parse_instr(row$instructions)
+    if (nchar(instr$label_def) > 0) entry$definition <- instr$label_def
+    av <- row$allowed_values
+    if (is.list(av)) av <- unlist(av)
+    if (!is.null(av) && length(av) > 0 && !all(is.na(av))) {
+      vals <- lapply(av, function(v) {
+        obj <- list(value = v)
+        vd <- instr$value_defs[[v]]
+        if (!is.null(vd) && nchar(vd) > 0) obj$definition <- vd
+        obj
+      })
+      entry$values <- vals
+    }
+    entry
+  }
+
+  # Recursive helper to build schema for children of a parent
+  .build_children_schema <- function(parent_id) {
+    children <- df[!is.na(df$parent_label_id) &
+                     df$parent_label_id == parent_id, , drop = FALSE]
+    children <- children[order(children$order_index), , drop = FALSE]
+    schema <- list()
+    for (j in seq_len(nrow(children))) {
+      ckey <- children$name[j]
+      if (is.na(ckey) || nchar(ckey) == 0) next
+      if (children$label_type[j] == "group") {
+        grp_entry <- list(type = "group", display = children$display_name[j])
+        grp_instr <- .parse_instr(children$instructions[j])
+        if (nchar(grp_instr$label_def) > 0) grp_entry$definition <- grp_instr$label_def
+        grp_entry$items <- .build_children_schema(children$label_id[j])
+        schema[[ckey]] <- grp_entry
+      } else {
+        schema[[ckey]] <- .build_entry(children[j, ])
+      }
+    }
+    schema
+  }
+
   has_parent <- !is.na(df$parent_label_id) & nchar(df$parent_label_id) > 0
   top_df  <- df[!has_parent, , drop = FALSE]
-  kids_df <- df[ has_parent, , drop = FALSE]
   top_df  <- top_df[order(top_df$order_index), , drop = FALSE]
 
   schema <- list()
-
   for (i in seq_len(nrow(top_df))) {
     row  <- top_df[i, ]
     key  <- row$name
     if (is.na(key) || nchar(key) == 0) next
 
     if (row$label_type == "group") {
-      gc <- kids_df[!is.na(kids_df$parent_label_id) &
-                      kids_df$parent_label_id == row$label_id, , drop = FALSE]
-      gc <- gc[order(gc$order_index), , drop = FALSE]
-
-      child_schema <- list()
-      for (j in seq_len(nrow(gc))) {
-        ckey <- gc$name[j]
-        if (is.na(ckey) || nchar(ckey) == 0) next
-        entry <- list(type = gc$variable_type[j],
-                      display = gc$display_name[j])
-        if (isTRUE(gc$mandatory[j])) entry$mandatory <- TRUE
-        av <- gc$allowed_values[[j]]
-        if (!is.null(av) && length(av) > 0 && !all(is.na(av)))
-          entry$values <- av
-        child_schema[[ckey]] <- entry
-      }
-
-      schema[[key]] <- list(
+      grp_entry <- list(
         type    = "group",
         display = row$display_name,
-        note    = "Stored as JSON array; each article may have multiple instances",
-        items   = child_schema
+        note    = "Stored as JSON array; each article may have multiple instances"
       )
+      grp_instr <- .parse_instr(row$instructions)
+      if (nchar(grp_instr$label_def) > 0) grp_entry$definition <- grp_instr$label_def
+      grp_entry$items <- .build_children_schema(row$label_id)
+      schema[[key]] <- grp_entry
     } else {
-      entry <- list(type    = row$variable_type,
-                    display = row$display_name)
-      if (isTRUE(row$mandatory)) entry$mandatory <- TRUE
-      av <- row$allowed_values[[1]]
-      if (!is.null(av) && length(av) > 0 && !all(is.na(av)))
-        entry$values <- av
-      schema[[key]] <- entry
+      schema[[key]] <- .build_entry(row)
     }
   }
 
