@@ -1,11 +1,11 @@
-// www/tooltips.js — Bootstrap 5 tooltip + popover initialisation
+// www/tooltips.js — Bootstrap 5 tooltip initialisation
 // ============================================================
 // Tooltips are attached to clickable question-mark icons (tooltip-icon class).
 // Each icon carries data-bs-trigger="click" so the tooltip opens/closes on
 // click rather than hover.  Clicking anywhere outside an open tooltip
 // dismisses it.
 //
-// Popovers are used for rich HTML content (value definitions).
+// Popovers are handled natively by bslib::popover() — no JS needed here.
 
 // Initialise all Bootstrap tooltips present in the DOM
 function initTooltips() {
@@ -18,41 +18,14 @@ function initTooltips() {
       new bootstrap.Tooltip(el);
     }
   });
-
-  // Initialise Bootstrap popovers (rich HTML tooltips)
-  var popoverTriggerList = [].slice.call(
-    document.querySelectorAll('[data-bs-toggle="popover"]')
-  );
-  popoverTriggerList.forEach(function (el) {
-    if (!bootstrap.Popover.getInstance(el)) {
-      new bootstrap.Popover(el, {
-        html: true,
-        sanitize: false,
-        trigger: 'click',
-        placement: 'top'
-      });
-    }
-  });
 }
 
-// Dismiss any open click-triggered tooltip or popover when the user clicks outside
+// Dismiss any open click-triggered tooltip when the user clicks outside
 document.addEventListener('click', function (e) {
-  // Dismiss tooltips
   document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
     var instance = bootstrap.Tooltip.getInstance(el);
     if (instance && !el.contains(e.target)) {
       instance.hide();
-    }
-  });
-  // Dismiss popovers
-  document.querySelectorAll('[data-bs-toggle="popover"]').forEach(function (el) {
-    var instance = bootstrap.Popover.getInstance(el);
-    if (instance && !el.contains(e.target)) {
-      // Don't dismiss if clicking inside the popover content itself
-      var popoverEl = document.querySelector('.popover');
-      if (!popoverEl || !popoverEl.contains(e.target)) {
-        instance.hide();
-      }
     }
   });
 }, true);
