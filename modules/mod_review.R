@@ -216,19 +216,38 @@ mod_review_server <- function(id, project_id, session_rv,
         pid_col  <- vapply(seq_len(nrow(lbls)), function(r)
           as.character(lbls$parent_label_id[r] %||% "")[1], "")
         pid_col[is.na(pid_col)] <- ""
+
+        # Recursive helper: initialise instances for a group and its sub-groups
+        .init_group_insts <- function(grp_id, gname, grp_meta, prefix) {
+          existing <- grp_meta
+          if (!is.list(existing)) existing <- list()
+          n_exist  <- max(length(existing), 1L)
+          keys <- lapply(seq_len(n_exist), function(j) paste0(prefix, "_", j))
+          insts[[prefix]] <<- keys
+          es_instance_counter[[prefix]] <<- max(
+            es_instance_counter[[prefix]] %||% 0L, n_exist)
+          # Find child groups of this group
+          child_groups <- lbls[pid_col == grp_id & lbls$label_type == "group", ,
+                               drop = FALSE]
+          if (nrow(child_groups) > 0) {
+            for (inst_j in seq_len(n_exist)) {
+              inst_meta <- if (inst_j <= length(existing)) existing[[inst_j]] else list()
+              key <- keys[[inst_j]]
+              for (cg in seq_len(nrow(child_groups))) {
+                cg_name <- as.character(child_groups$name[cg])
+                nested_prefix <- paste0(key, "__", cg_name)
+                .init_group_insts(child_groups$label_id[cg], cg_name,
+                                  inst_meta[[cg_name]], nested_prefix)
+              }
+            }
+          }
+        }
+
         grp_rows <- lbls[lbls$label_type == "group" & pid_col == "", ,
                          drop = FALSE]
         for (i in seq_len(nrow(grp_rows))) {
-          gname    <- grp_rows$name[i]
-          existing <- meta[[gname]]
-          n_exist  <- if (is.list(existing)) {
-            if (length(existing) > 0) length(existing) else 1L
-          } else 1L
-          insts[[gname]] <- lapply(seq_len(n_exist), function(j)
-            paste0(gname, "_", j))
-          # Update monotonic counter to at least n_exist
-          es_instance_counter[[gname]] <<- max(
-            es_instance_counter[[gname]] %||% 0L, n_exist)
+          gname <- grp_rows$name[i]
+          .init_group_insts(grp_rows$label_id[i], gname, meta[[gname]], gname)
         }
       }}
       group_instances(insts)
@@ -617,37 +636,45 @@ mod_review_server <- function(id, project_id, session_rv,
       top_lbls <- lbls[pid_col == "", , drop = FALSE]
 
       # Ensure newly-added groups have at least one instance key.
-      # If any group is missing, update the local `insts` and write back
-      # to the reactiveVal, but CONTINUE rendering (no return(NULL)).
-      # This prevents a blank-frame flash that causes visual oscillation.
+      # Recursive: also handles nested sub-groups.
       insts    <- group_instances()
       changed  <- FALSE
+      .ensure_group_insts <- function(grp_lbl, grp_meta, prefix) {
+        gn_insts <- insts[[prefix]]
+        if (is.null(gn_insts)) {
+          existing <- grp_meta
+          if (!is.list(existing)) existing <- list()
+          n_exist  <- max(length(existing), 1L)
+          insts[[prefix]] <<- lapply(seq_len(n_exist), function(j)
+            paste0(prefix, "_", j))
+          es_instance_counter[[prefix]] <<- max(
+            es_instance_counter[[prefix]] %||% 0L, n_exist)
+          changed <<- TRUE
+          # Also init nested sub-groups
+          child_groups <- lbls[pid_col == as.character(grp_lbl$label_id)[1] &
+                                 lbls$label_type == "group", , drop = FALSE]
+          if (nrow(child_groups) > 0) {
+            for (inst_j in seq_len(n_exist)) {
+              inst_meta <- if (inst_j <= length(existing)) existing[[inst_j]] else list()
+              key <- insts[[prefix]][[inst_j]]
+              for (cg in seq_len(nrow(child_groups))) {
+                cg_name <- as.character(child_groups$name[cg])
+                nested_prefix <- paste0(key, "__", cg_name)
+                .ensure_group_insts(as.list(child_groups[cg, ]),
+                                    inst_meta[[cg_name]], nested_prefix)
+              }
+            }
+          }
+        }
+      }
       for (gi in seq_len(nrow(top_lbls))) {
         gl <- top_lbls[gi, ]
         if (identical(as.character(gl$label_type)[1], "group")) {
           gn <- as.character(gl$name)[1]
-          gn_insts <- insts[[gn]]
-          if (is.null(gn_insts)) {
-            existing <- meta[[gn]]
-            n_exist  <- if (is.list(existing)) {
-                          if (length(existing) > 0) length(existing) else 1L
-                        } else 1L
-            insts[[gn]] <- lapply(seq_len(n_exist), function(j)
-              paste0(gn, "_", j))
-            es_instance_counter[[gn]] <<- max(
-              es_instance_counter[[gn]] %||% 0L, n_exist)
-            changed <- TRUE
-          } else if (length(gn_insts) == 0) {
-            # Allow zero instances — user explicitly removed all
-          }
+          .ensure_group_insts(as.list(gl), meta[[gn]], gn)
         }
       }
       if (changed) {
-        # Write back the updated instances so ES module observers and
-        # future add/remove actions see the correct state.  The reactive
-        # change will schedule a second render, but since all groups will
-        # already have instances, `changed` will be FALSE and the output
-        # HTML will be identical — no visible flicker.
         group_instances(insts)
       }
 
@@ -718,41 +745,41 @@ mod_review_server <- function(id, project_id, session_rv,
 
     # ---- Helpers: UI renderers ----------------------------
 
-    # Build rich tooltip content from structured instructions
-    .build_tooltip_content <- function(instr_str) {
+    # Build rich tooltip UI elements from structured instructions
+    .build_tooltip_ui <- function(instr_str) {
       if (is.null(instr_str) || is.na(instr_str) || nchar(instr_str) == 0)
         return(NULL)
       parsed <- parse_label_instructions(instr_str)
-      parts <- character(0)
+      parts <- list()
       if (nchar(parsed$label_def) > 0)
-        parts <- c(parts, parsed$label_def)
+        parts <- c(parts, list(p(parsed$label_def)))
       if (length(parsed$value_defs) > 0) {
-        vd_items <- vapply(names(parsed$value_defs), function(v)
-          paste0("<b>", htmltools::htmlEscape(v), ":</b> ",
-                 htmltools::htmlEscape(parsed$value_defs[[v]])),
-          character(1))
-        parts <- c(parts,
-          paste0("<hr style='margin:4px 0'>",
-                 "<small><b>Value definitions:</b></small><br>",
-                 paste(vd_items, collapse = "<br>")))
+        vd_items <- lapply(names(parsed$value_defs), function(v)
+          tags$li(tags$b(v), ": ", parsed$value_defs[[v]])
+        )
+        parts <- c(parts, list(
+          tags$hr(style = "margin:4px 0"),
+          tags$small(tags$b("Value definitions:")),
+          tags$ul(style = "padding-left:1.2em; margin-bottom:0;", tagList(vd_items))
+        ))
       }
       if (length(parts) == 0) return(NULL)
-      paste(parts, collapse = "")
+      parts
     }
 
-    # Render a rich tooltip icon (popover with HTML content)
+    # Render a rich tooltip icon using bslib::popover (auto-initialises)
     .tooltip_popover <- function(instr_str) {
-      content <- .build_tooltip_content(instr_str)
+      content <- .build_tooltip_ui(instr_str)
       if (is.null(content)) return(NULL)
-      tags$span(
-        class               = "tooltip-icon ms-1",
-        `data-bs-toggle`    = "popover",
-        `data-bs-html`      = "true",
-        `data-bs-content`   = content,
-        `data-bs-trigger`   = "click",
-        `data-bs-placement` = "top",
-        tabindex            = "0",
-        icon("circle-question")
+      bslib::popover(
+        tags$span(
+          class   = "tooltip-icon ms-1",
+          tabindex = "0",
+          icon("circle-question")
+        ),
+        tagList(content),
+        placement = "top",
+        options   = list(html = TRUE)
       )
     }
 
@@ -979,10 +1006,14 @@ mod_review_server <- function(id, project_id, session_rv,
     }
 
     # Render a group label container with dynamic instance cards
-    .render_group <- function(grp_lbl, all_lbls, meta) {
+    # inst_key_prefix: for top-level groups it's the group name (e.g. "study_site")
+    #   for nested groups inside a parent instance it's "parent_key__group_name"
+    .render_group <- function(grp_lbl, all_lbls, meta, inst_key_prefix = NULL) {
      tryCatch({
       gname      <- as.character(grp_lbl$name)[1]
       disp_name  <- as.character(grp_lbl$display_name %||% gname)[1]
+      # Default prefix is just the group name (backward compatible)
+      if (is.null(inst_key_prefix)) inst_key_prefix <- gname
       # Safely find child labels
       cpid <- vapply(seq_len(nrow(all_lbls)), function(r)
         as.character(all_lbls$parent_label_id[r] %||% "")[1], "")
@@ -992,7 +1023,7 @@ mod_review_server <- function(id, project_id, session_rv,
       existing   <- meta[[gname]]
       if (!is.list(existing)) existing <- list()
 
-      inst_keys  <- group_instances()[[gname]]
+      inst_keys  <- group_instances()[[inst_key_prefix]]
       if (is.null(inst_keys)) inst_keys <- list()
       n          <- length(inst_keys)
 
@@ -1003,7 +1034,7 @@ mod_review_server <- function(id, project_id, session_rv,
             class   = "btn btn-sm btn-outline-primary",
             onclick = sprintf(
               'Shiny.setInputValue("%s", "%s", {priority:"event"});',
-              ns("add_instance"), gname),
+              ns("add_instance"), inst_key_prefix),
             icon("plus"), " Add Instance"
           )
         ),
@@ -1023,7 +1054,7 @@ mod_review_server <- function(id, project_id, session_rv,
                   class   = "btn btn-sm btn-outline-danger",
                   onclick = sprintf(
                     'Shiny.setInputValue("%s", {g:"%s",j:%d}, {priority:"event"});',
-                    ns("remove_instance"), gname, j),
+                    ns("remove_instance"), inst_key_prefix, j),
                   icon("trash"), " Remove"
                 )
               ),
@@ -1034,9 +1065,16 @@ mod_review_server <- function(id, project_id, session_rv,
                 else
                   tagList(lapply(seq_len(nrow(child_lbls)), function(k) {
                     child <- as.list(child_lbls[k, ])
-                    .render_field(child,
-                                  val      = inst_meta[[child$name]],
-                                  inst_key = key)
+                    if (identical(child$label_type, "group")) {
+                      # Nested sub-group: recurse with scoped prefix
+                      nested_prefix <- paste0(key, "__", child$name)
+                      .render_group(child, all_lbls, inst_meta,
+                                    inst_key_prefix = nested_prefix)
+                    } else {
+                      .render_field(child,
+                                    val      = inst_meta[[child$name]],
+                                    inst_key = key)
+                    }
                   }))
               )
             )
@@ -1092,11 +1130,35 @@ mod_review_server <- function(id, project_id, session_rv,
       if (!is.data.frame(lbls) || nrow(lbls) == 0) return(list())
 
       insts    <- group_instances()
-      result   <- list()
-      # Safely identify top-level labels
+      # Safely identify parent IDs for all labels
       pid_col  <- vapply(seq_len(nrow(lbls)), function(r)
         as.character(lbls$parent_label_id[r] %||% "")[1], "")
       pid_col[is.na(pid_col)] <- ""
+
+      # Recursive helper: collect values for a group's instances
+      .collect_group <- function(grp_id, prefix) {
+        child_lbls <- lbls[pid_col == as.character(grp_id), , drop = FALSE]
+        group_keys <- insts[[prefix]]
+        if (is.null(group_keys)) group_keys <- list()
+        lapply(group_keys, function(key) {
+          iv <- list()
+          for (k in seq_len(nrow(child_lbls))) {
+            cl <- as.list(child_lbls[k, ])
+            if (identical(cl$label_type, "group")) {
+              # Nested sub-group: recurse
+              nested_prefix <- paste0(key, "__", cl$name)
+              iv[[cl$name]] <- .collect_group(cl$label_id, nested_prefix)
+            } else {
+              raw <- input[[paste0("lbl_", cl$name, "__", key)]]
+              if (!is.null(raw))
+                iv[[cl$name]] <- .coerce_value(cl$variable_type %||% "text", raw)
+            }
+          }
+          iv
+        })
+      }
+
+      result   <- list()
       top_lbls <- lbls[pid_col == "", , drop = FALSE]
 
       for (i in seq_len(nrow(top_lbls))) {
@@ -1105,24 +1167,7 @@ mod_review_server <- function(id, project_id, session_rv,
         nm    <- as.character(lbl$name)[1]
 
         if (identical(lbl$label_type, "group")) {
-          # Collect one value-list per instance
-          cpid <- vapply(seq_len(nrow(lbls)), function(r)
-            as.character(lbls$parent_label_id[r] %||% "")[1], "")
-          cpid[is.na(cpid)] <- ""
-          child_lbls  <- lbls[cpid == as.character(lbl$label_id)[1], , drop = FALSE]
-          group_keys  <- insts[[nm]]
-          if (is.null(group_keys)) group_keys <- list()
-          inst_values <- lapply(group_keys, function(key) {
-            iv <- list()
-            for (k in seq_len(nrow(child_lbls))) {
-              cl    <- as.list(child_lbls[k, ])
-              raw   <- input[[paste0("lbl_", cl$name, "__", key)]]
-              if (!is.null(raw))
-                iv[[cl$name]] <- .coerce_value(cl$variable_type %||% "text", raw)
-            }
-            iv
-          })
-          result[[nm]] <- inst_values
+          result[[nm]] <- .collect_group(lbl$label_id, nm)
 
         } else if (identical(vtype, "bounding_box")) {
           base <- paste0("lbl_", nm)
