@@ -17,16 +17,29 @@ mod_review_ui <- function(id) {
   ns <- NS(id)
   div(class = "container-fluid py-3",
 
-    # ---- Top bar: search + progress -------------------------
+    # ---- Top bar: search + progress + sidebar toggle --------
     div(class = "row mb-3 align-items-center g-2",
-      div(class = "col-md-6",
+      div(class = "col-auto d-lg-none",
+        tags$button(
+          id      = ns("toggle_sidebar"),
+          class   = "btn btn-outline-secondary btn-sm",
+          onclick = sprintf(
+            '(function(){
+               var sb = document.getElementById("%s");
+               sb.classList.toggle("d-none");
+             })()',
+            ns("sidebar_col")),
+          icon("bars"), " Articles"
+        )
+      ),
+      div(class = "col",
         div(class = "input-group",
           tags$span(class = "input-group-text", icon("search")),
           textInput(ns("search"), label = NULL,
                     placeholder = "Search by ID, title or author…")
         )
       ),
-      div(class = "col-md-6 text-md-end",
+      div(class = "col-auto text-end",
         uiOutput(ns("progress_badge"))
       )
     ),
@@ -34,8 +47,9 @@ mod_review_ui <- function(id) {
     # ---- Main layout: article list + review panel -----------
     div(class = "row g-3",
 
-      # ---- Left: scrollable article list -------------------
-      div(class = "col-lg-3",
+      # ---- Left: scrollable article list (hidden on small screens) ----
+      div(id = ns("sidebar_col"),
+          class = "col-lg-3 d-none d-lg-block review-sidebar",
         div(class = "card h-100",
           div(class = "card-header py-2 d-flex align-items-center",
             strong(icon("list"), " Articles"),
@@ -51,8 +65,8 @@ mod_review_ui <- function(id) {
         )
       ),
 
-      # ---- Right: review panel -----------------------------
-      div(class = "col-lg-9",
+      # ---- Right: review panel (always visible, full width on small) --
+      div(class = "col-lg-9 col-12 review-main-panel",
         shinycssloaders::withSpinner(
           uiOutput(ns("review_panel")),
           type = 6, color = "#2C7A4B", size = 0.5
@@ -85,6 +99,10 @@ mod_review_server <- function(id, project_id, session_rv,
     # Needed for Add Instance: if user removes instance 2 of 3 then adds
     # a new one, the counter ensures a fresh key (4) rather than reusing 3.
     es_instance_counter <- list()
+    # Dirty flag: set TRUE when user edits any field since article load
+    dirty              <- reactiveVal(FALSE)
+    # Pending article: stores article ID user wants to navigate to
+    pending_article    <- reactiveVal(NULL)
 
     # ---- Simple unique key generator (for non-ES label inputs only) ----
     .new_key <- function() paste0(sample(c(letters[1:6], 0:9), 8, replace = TRUE),
@@ -175,6 +193,8 @@ mod_review_server <- function(id, project_id, session_rv,
     .select_article <- function(aid) {
       message(sprintf("[review] .select_article(%s) start", aid))
       current_article_id(aid)
+      loaded_at(Sys.time())
+      dirty(FALSE)   # reset dirty flag on article switch
       loaded_at(Sys.time())
 
       # Do NOT clear es_started_keys or es_module_entries — module servers
@@ -319,10 +339,50 @@ mod_review_server <- function(id, project_id, session_rv,
       .select_article(first)
     }, ignoreNULL = FALSE)
 
-    # Click handler from list sidebar
+    # Click handler from list sidebar — check for unsaved changes
     observeEvent(input$select_article, {
       req(input$select_article)
-      .select_article(input$select_article)
+      new_aid <- input$select_article
+      if (isTRUE(dirty()) && !is.null(current_article_id()) &&
+          !identical(new_aid, current_article_id())) {
+        pending_article(new_aid)
+        showModal(modalDialog(
+          title     = "Unsaved Changes",
+          size      = "s",
+          easyClose = TRUE,
+          footer    = tagList(
+            actionButton(ns("btn_discard_changes"), "Discard",
+                         class = "btn btn-danger"),
+            actionButton(ns("btn_save_then_nav"), "Save & Continue",
+                         class = "btn btn-success"),
+            modalButton("Go Back")
+          ),
+          p("You have unsaved changes. What would you like to do?")
+        ))
+      } else {
+        .select_article(new_aid)
+      }
+    })
+
+    # Discard unsaved changes and navigate
+    observeEvent(input$btn_discard_changes, {
+      removeModal()
+      aid <- pending_article()
+      pending_article(NULL)
+      if (!is.null(aid)) .select_article(aid)
+    })
+
+    # Save then navigate
+    observeEvent(input$btn_save_then_nav, {
+      removeModal()
+      tryCatch({
+        .do_save()
+        aid <- pending_article()
+        pending_article(NULL)
+        if (!is.null(aid)) .select_article(aid)
+      }, error = function(e) {
+        toast_error(paste("Save failed:", e$message))
+      })
     })
 
     # Refresh button — also refreshes labels so newly added labels appear
@@ -591,14 +651,48 @@ mod_review_server <- function(id, project_id, session_rv,
         group_instances(insts)
       }
 
-      tagList(lapply(seq_len(nrow(top_lbls)), function(i) {
+      # Build label elements — groups + effect_size span full width,
+      # simple labels go into a two-column grid
+      label_els <- lapply(seq_len(nrow(top_lbls)), function(i) {
         lbl <- as.list(top_lbls[i, ])
-        if (identical(lbl$label_type, "group")) {
+        is_group <- identical(lbl$label_type, "group")
+        is_es    <- identical(as.character(lbl$variable_type)[1], "effect_size")
+        is_bb    <- identical(as.character(lbl$variable_type)[1], "bounding_box")
+        is_osm   <- identical(as.character(lbl$variable_type)[1], "openstreetmap_location")
+        full_width <- is_group || is_es || is_bb || is_osm
+
+        el <- if (is_group) {
           .render_group(lbl, lbls, meta)
         } else {
           .render_field(lbl, val = meta[[lbl$name]], inst_key = NULL)
         }
-      }))
+        list(el = el, full_width = full_width)
+      })
+
+      # Arrange into rows: full-width items break the column flow
+      ui_parts <- list()
+      col_buf  <- list()
+      flush_cols <- function() {
+        if (length(col_buf) > 0) {
+          ui_parts[[length(ui_parts) + 1]] <<- div(
+            class = "row g-2 review-label-grid",
+            tagList(lapply(col_buf, function(el)
+              div(class = "col-md-6", el)))
+          )
+          col_buf <<- list()
+        }
+      }
+      for (item in label_els) {
+        if (item$full_width) {
+          flush_cols()
+          ui_parts[[length(ui_parts) + 1]] <- item$el
+        } else {
+          col_buf[[length(col_buf) + 1]] <- item$el
+        }
+      }
+      flush_cols()
+
+      tagList(ui_parts)
      }, error = function(e) {
       div(class = "alert alert-danger",
         h6("Label form error"),
@@ -624,6 +718,44 @@ mod_review_server <- function(id, project_id, session_rv,
 
     # ---- Helpers: UI renderers ----------------------------
 
+    # Build rich tooltip content from structured instructions
+    .build_tooltip_content <- function(instr_str) {
+      if (is.null(instr_str) || is.na(instr_str) || nchar(instr_str) == 0)
+        return(NULL)
+      parsed <- parse_label_instructions(instr_str)
+      parts <- character(0)
+      if (nchar(parsed$label_def) > 0)
+        parts <- c(parts, parsed$label_def)
+      if (length(parsed$value_defs) > 0) {
+        vd_items <- vapply(names(parsed$value_defs), function(v)
+          paste0("<b>", htmltools::htmlEscape(v), ":</b> ",
+                 htmltools::htmlEscape(parsed$value_defs[[v]])),
+          character(1))
+        parts <- c(parts,
+          paste0("<hr style='margin:4px 0'>",
+                 "<small><b>Value definitions:</b></small><br>",
+                 paste(vd_items, collapse = "<br>")))
+      }
+      if (length(parts) == 0) return(NULL)
+      paste(parts, collapse = "")
+    }
+
+    # Render a rich tooltip icon (popover with HTML content)
+    .tooltip_popover <- function(instr_str) {
+      content <- .build_tooltip_content(instr_str)
+      if (is.null(content)) return(NULL)
+      tags$span(
+        class               = "tooltip-icon ms-1",
+        `data-bs-toggle`    = "popover",
+        `data-bs-html`      = "true",
+        `data-bs-content`   = content,
+        `data-bs-trigger`   = "click",
+        `data-bs-placement` = "top",
+        tabindex            = "0",
+        icon("circle-question")
+      )
+    }
+
     # Render a single input field for one label
     .render_field <- function(lbl, val = NULL, inst_key = NULL) {
      tryCatch({
@@ -643,7 +775,8 @@ mod_review_server <- function(id, project_id, session_rv,
       is_mandatory <- isTRUE(as.logical(lbl$mandatory[1]))
       mstar    <- if (is_mandatory)
         span(class = "text-danger ms-1", "*") else NULL
-      lbl_ui   <- tagList(disp, mstar)
+      tip_icon <- .tooltip_popover(tip)
+      lbl_ui   <- tagList(disp, mstar, tip_icon)
 
       # Flatten val to scalar for types that expect it
       # Uses .safe_scalar() to avoid any && / || on potentially non-scalar values
@@ -837,8 +970,7 @@ mod_review_server <- function(id, project_id, session_rv,
                   value = if (!is.null(val1)) as.character(val1) else "")
       )
 
-      div(class = "mb-3",
-        if (nchar(tip) > 0L) div(widget, title = tip) else widget
+      div(class = "mb-3", widget
       )
      }, error = function(e) {
       div(class = "alert alert-warning py-1 small mb-3",
@@ -922,6 +1054,9 @@ mod_review_server <- function(id, project_id, session_rv,
     observeEvent(input$add_instance, {
       gname <- as.character(input$add_instance)[1]
       req(nchar(gname) > 0)
+      # Snapshot current values before re-render so existing data is preserved
+      current_vals <- tryCatch(.collect_values(), error = function(e) list())
+      if (length(current_vals) > 0) current_meta(current_vals)
       insts <- group_instances()
       if (is.null(insts[[gname]])) insts[[gname]] <- list()
       # Monotonic counter ensures unique deterministic keys even after removal
@@ -930,11 +1065,15 @@ mod_review_server <- function(id, project_id, session_rv,
       new_key <- paste0(gname, "_", n)
       insts[[gname]] <- c(insts[[gname]], list(new_key))
       group_instances(insts)
+      dirty(TRUE)
     })
 
     observeEvent(input$remove_instance, {
       info <- input$remove_instance
       req(info$g, info$j)
+      # Snapshot current values before re-render
+      current_vals <- tryCatch(.collect_values(), error = function(e) list())
+      if (length(current_vals) > 0) current_meta(current_vals)
       insts <- group_instances()
       keys  <- insts[[info$g]]
       if (!is.null(keys)) {
@@ -942,6 +1081,7 @@ mod_review_server <- function(id, project_id, session_rv,
           insts[[info$g]] <- keys[-info$j]
       }
       group_instances(insts)
+      dirty(TRUE)
     })
 
     # --------------------------------------------------------
@@ -1325,6 +1465,7 @@ mod_review_server <- function(id, project_id, session_rv,
         toast_success("Saved successfully.")
       }
 
+      dirty(FALSE)   # reset dirty flag after successful save
       articles_refresh(articles_refresh() + 1L)
       invisible(TRUE)
     }

@@ -1,0 +1,56 @@
+{
+  "location": {
+    "type": "openstreetmap_location",
+    "display": "Location"
+  },
+  "notes": {
+    "type": "text",
+    "display": "Notes",
+    "definition": "Type notes that are relevant"
+  },
+  "oro": {
+    "type": "group",
+    "display": "ORO",
+    "definition": "All the information pertaining to one ORO",
+    "items": {
+      "oro_type": {
+        "type": "select one",
+        "display": "ORO type",
+        "mandatory": true,
+        "definition": "What type of ORO is in the study?",
+        "values": [
+          {
+            "value": "Mitigation",
+            "definition": "Mitigation ORO"
+          },
+          {
+            "value": "Natural resilience",
+            "definition": "Supporting natural resilience"
+          },
+          {
+            "value": "Societal adapt",
+            "definition": "Helping societies adapt"
+          }
+        ]
+      },
+      "biological_impact": {
+        "type": "select multiple",
+        "display": "Biological impact",
+        "values": [
+          {
+            "value": "Genetic"
+          },
+          {
+            "value": "Population"
+          },
+          {
+            "value": "Abiotic"
+          },
+          {
+            "value": "Ecosystem"
+          }
+        ]
+      }
+    }
+  }
+}

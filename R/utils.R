@@ -211,3 +211,198 @@ clone_labels_to_project <- function(source_project_id, target_project_id, token)
 
   invisible(NULL)
 }
+
+# ---- Parse structured instructions -------------------------
+#' Parse label instructions (may be plain text or JSON with value_defs)
+#'
+#' @param instr  Character string (plain text or JSON)
+#' @return       Named list with label_def (string) and value_defs (named list)
+parse_label_instructions <- function(instr) {
+  if (is.null(instr) || is.na(instr) || nchar(trimws(instr)) == 0)
+    return(list(label_def = "", value_defs = list()))
+  parsed <- tryCatch(
+    jsonlite::fromJSON(instr, simplifyVector = FALSE),
+    error = function(e) NULL
+  )
+  if (is.list(parsed) && !is.null(parsed$label_def))
+    return(parsed)
+  list(label_def = instr, value_defs = list())
+}
+
+# ---- Build label schema JSON for export --------------------
+#' Export label schema to JSON with definitions
+#'
+#' @param labels_df  Data frame of labels from the labels table
+#' @return           Character string of pretty-printed JSON
+build_label_schema_export <- function(labels_df) {
+  if (!is.data.frame(labels_df) || nrow(labels_df) == 0) return("{}")
+
+  has_parent <- !is.na(labels_df$parent_label_id) &
+                nchar(as.character(labels_df$parent_label_id)) > 0
+  top_df  <- labels_df[!has_parent, , drop = FALSE]
+  kids_df <- labels_df[ has_parent, , drop = FALSE]
+  top_df  <- top_df[order(top_df$order_index), , drop = FALSE]
+
+  .build_entry <- function(row) {
+    entry <- list(type = as.character(row$variable_type),
+                  display = as.character(row$display_name))
+    if (isTRUE(row$mandatory)) entry$mandatory <- TRUE
+    instr <- parse_label_instructions(row$instructions)
+    if (nchar(instr$label_def) > 0) entry$definition <- instr$label_def
+    av <- row$allowed_values
+    if (is.list(av)) av <- unlist(av)
+    if (!is.null(av) && length(av) > 0 && !all(is.na(av))) {
+      vals <- lapply(av, function(v) {
+        obj <- list(value = v)
+        vd <- instr$value_defs[[v]]
+        if (!is.null(vd) && nchar(vd) > 0) obj$definition <- vd
+        obj
+      })
+      entry$values <- vals
+    }
+    if (!is.na(row$category) && nchar(as.character(row$category)) > 0)
+      entry$category <- as.character(row$category)
+    entry
+  }
+
+  schema <- list()
+  for (i in seq_len(nrow(top_df))) {
+    row <- top_df[i, ]
+    key <- as.character(row$name)
+    if (is.na(key) || nchar(key) == 0) next
+
+    if (row$label_type == "group") {
+      gc <- kids_df[!is.na(kids_df$parent_label_id) &
+                      kids_df$parent_label_id == row$label_id, , drop = FALSE]
+      gc <- gc[order(gc$order_index), , drop = FALSE]
+      child_schema <- list()
+      for (j in seq_len(nrow(gc))) {
+        ckey <- as.character(gc$name[j])
+        if (is.na(ckey) || nchar(ckey) == 0) next
+        child_schema[[ckey]] <- .build_entry(gc[j, ])
+      }
+      grp_entry <- list(type = "group", display = as.character(row$display_name))
+      grp_instr <- parse_label_instructions(row$instructions)
+      if (nchar(grp_instr$label_def) > 0) grp_entry$definition <- grp_instr$label_def
+      if (!is.na(row$category) && nchar(as.character(row$category)) > 0)
+        grp_entry$category <- as.character(row$category)
+      grp_entry$items <- child_schema
+      schema[[key]] <- grp_entry
+    } else {
+      schema[[key]] <- .build_entry(row)
+    }
+  }
+
+  jsonlite::toJSON(schema, auto_unbox = TRUE, pretty = TRUE)
+}
+
+# ---- Import label schema from JSON -------------------------
+#' Import a label schema JSON and create labels in the DB
+#'
+#' @param json_text   Character string of JSON
+#' @param project_id  UUID of the target project
+#' @param token       User JWT for Supabase API calls
+#' @return Invisible NULL; labels are inserted as a side effect
+import_label_schema <- function(json_text, project_id, token) {
+  schema <- jsonlite::fromJSON(json_text, simplifyVector = FALSE)
+  if (!is.list(schema) || length(schema) == 0)
+    stop("Invalid schema: expected a JSON object with label keys.")
+
+  # Get current max order_index
+  existing <- tryCatch(
+    sb_get("labels", filters = list(project_id = project_id),
+           select = "order_index", token = token),
+    error = function(e) data.frame()
+  )
+  next_order <- if (is.data.frame(existing) && nrow(existing) > 0)
+    max(existing$order_index, na.rm = TRUE) + 1L else 1L
+
+  # Build structured instructions from definition + value definitions
+  .build_instructions <- function(entry) {
+    label_def <- entry$definition %||% ""
+    value_defs <- list()
+    if (!is.null(entry$values) && is.list(entry$values)) {
+      for (v in entry$values) {
+        if (!is.null(v$definition) && nchar(v$definition) > 0)
+          value_defs[[v$value]] <- v$definition
+      }
+    }
+    if (nchar(label_def) == 0 && length(value_defs) == 0) return("")
+    as.character(jsonlite::toJSON(
+      list(label_def = label_def, value_defs = value_defs),
+      auto_unbox = TRUE
+    ))
+  }
+
+  for (key in names(schema)) {
+    entry <- schema[[key]]
+    ltype <- entry$type %||% "text"
+
+    if (identical(ltype, "group")) {
+      # Create group
+      body <- list(
+        project_id    = project_id,
+        label_type    = "group",
+        name          = key,
+        display_name  = entry$display %||% key,
+        variable_type = "text",
+        mandatory     = FALSE,
+        order_index   = next_order
+      )
+      if (!is.null(entry$category)) body$category <- entry$category
+      instr <- .build_instructions(entry)
+      if (nchar(instr) > 0) body$instructions <- instr
+      grp <- sb_post("labels", body, token = token)
+      next_order <- next_order + 1L
+
+      # Create children
+      items <- entry$items %||% list()
+      child_order <- 1L
+      for (child_key in names(items)) {
+        child <- items[[child_key]]
+        child_body <- list(
+          project_id      = project_id,
+          label_type      = "single",
+          parent_label_id = grp$label_id,
+          name            = child_key,
+          display_name    = child$display %||% child_key,
+          variable_type   = child$type %||% "text",
+          mandatory       = isTRUE(child$mandatory),
+          order_index     = child_order
+        )
+        if (!is.null(child$category)) child_body$category <- child$category
+        # Extract allowed values from values array
+        if (!is.null(child$values) && is.list(child$values)) {
+          child_body$allowed_values <- vapply(child$values, function(v)
+            v$value %||% as.character(v), character(1))
+        }
+        c_instr <- .build_instructions(child)
+        if (nchar(c_instr) > 0) child_body$instructions <- c_instr
+        sb_post("labels", child_body, token = token)
+        child_order <- child_order + 1L
+      }
+    } else {
+      # Single label
+      body <- list(
+        project_id    = project_id,
+        label_type    = "single",
+        name          = key,
+        display_name  = entry$display %||% key,
+        variable_type = ltype,
+        mandatory     = isTRUE(entry$mandatory),
+        order_index   = next_order
+      )
+      if (!is.null(entry$category)) body$category <- entry$category
+      if (!is.null(entry$values) && is.list(entry$values)) {
+        body$allowed_values <- vapply(entry$values, function(v)
+          v$value %||% as.character(v), character(1))
+      }
+      instr <- .build_instructions(entry)
+      if (nchar(instr) > 0) body$instructions <- instr
+      sb_post("labels", body, token = token)
+      next_order <- next_order + 1L
+    }
+  }
+
+  invisible(NULL)
+}
