@@ -1452,47 +1452,57 @@ mod_review_server <- function(id, project_id, session_rv,
 
       } else {
         # ---- Single-instance mode: top-level ES or no ES ----
-        es_inputs <- tryCatch(es_module$collect_inputs(), error = function(e) NULL)
-        if (!is.null(es_inputs)) {
-          computed <- tryCatch(
-            compute_effect_size(es_inputs),
-            error = function(e) {
-              message("[effect_size compute] error: ", e$message)
-              list(r = NULL, z = NULL, var_z = NULL,
-                   effect_status = "insufficient_data",
-                   effect_warnings = c(paste("Computation error:", e$message)))
-            }
-          )
-          tryCatch({
-            existing_es <- sb_get("effect_sizes",
-              filters = list(article_id = aid),
-              select  = "effect_id",
-              token   = session_rv$token)
+        # Check whether the schema actually has any effect_size labels.
+        # If not, skip ES save entirely (no warning needed).
+        lbls_all <- project_labels()
+        has_any_es <- is.data.frame(lbls_all) && nrow(lbls_all) > 0 &&
+                      any(as.character(lbls_all$variable_type) == "effect_size", na.rm = TRUE)
 
-            es_body <- .build_es_body(aid, NULL, es_inputs, computed)
+        if (has_any_es) {
+          es_inputs <- tryCatch(es_module$collect_inputs(), error = function(e) NULL)
+          if (!is.null(es_inputs)) {
+            computed <- tryCatch(
+              compute_effect_size(es_inputs),
+              error = function(e) {
+                message("[effect_size compute] error: ", e$message)
+                list(r = NULL, z = NULL, var_z = NULL,
+                     effect_status = "insufficient_data",
+                     effect_warnings = c(paste("Computation error:", e$message)))
+              }
+            )
+            tryCatch({
+              existing_es <- sb_get("effect_sizes",
+                filters = list(article_id = aid),
+                select  = "effect_id",
+                token   = session_rv$token)
 
-            if (is.data.frame(existing_es) && nrow(existing_es) > 0) {
-              sb_patch("effect_sizes", "effect_id",
-                       existing_es$effect_id[1], es_body,
-                       token = session_rv$token)
-            } else {
-              sb_post("effect_sizes", es_body, token = session_rv$token)
-            }
-            message(sprintf("[do_save] Effect size saved for %s: r=%s, z=%s, var_z=%s, status=%s",
-                            aid, computed$r, computed$z, computed$var_z,
-                            computed$effect_status))
-          }, error = function(e) {
-            showNotification(paste("Effect size save failed:", e$message),
-                             type = "warning")
-            message("[effect_size save] error: ", e$message)
-          })
-          es_module$result(computed)
+              es_body <- .build_es_body(aid, NULL, es_inputs, computed)
+
+              if (is.data.frame(existing_es) && nrow(existing_es) > 0) {
+                sb_patch("effect_sizes", "effect_id",
+                         existing_es$effect_id[1], es_body,
+                         token = session_rv$token)
+              } else {
+                sb_post("effect_sizes", es_body, token = session_rv$token)
+              }
+              message(sprintf("[do_save] Effect size saved for %s: r=%s, z=%s, var_z=%s, status=%s",
+                              aid, computed$r, computed$z, computed$var_z,
+                              computed$effect_status))
+            }, error = function(e) {
+              showNotification(paste("Effect size save failed:", e$message),
+                               type = "warning")
+              message("[effect_size save] error: ", e$message)
+            })
+            es_module$result(computed)
+          } else {
+            es_module$result(NULL)
+            message("[do_save] No effect size inputs collected (study_design not set)")
+            showNotification(
+              "Effect size was not saved (no study design selected).",
+              type = "warning", duration = 6)
+          }
         } else {
-          es_module$result(NULL)
-          message("[do_save] No effect size inputs collected (study_design not set)")
-          showNotification(
-            "Effect size was not saved (no study design selected).",
-            type = "warning", duration = 6)
+          message("[do_save] No effect_size labels in schema — skipping ES save")
         }
       }
 

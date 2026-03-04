@@ -563,7 +563,7 @@ You should see SELECT/INSERT/UPDATE/DELETE policies with `TO authenticated` and 
 6. **Check:** Reload the page. Edit the same label. All value definitions should persist.
 
 **Pass criteria:** Value definitions save and reload correctly for `select one` and `select multiple` label types.
-[x] Gate Passed
+[x] In Progress: value definitions only appear when a select one or select multiple label is saved, and then 'edit' is clicked -- then the value definitions appear
 
 ---
 
@@ -584,7 +584,7 @@ You should see SELECT/INSERT/UPDATE/DELETE policies with `TO authenticated` and 
 
 **Pass criteria:** All labels with definitions (including children in groups) show clickable ❓ icons with rich tooltips containing both label and value definitions.
 
-[x] In progress:  icon displayed for normal labels, but nothing happens when icon is clicked. No icons display at all when a label is a child label in a label group
+[x] In progress: question mark icon displayed, but nothing happens when icon is clicked. 
 ---
 
 ### Gate 13C — Label Schema Export

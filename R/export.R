@@ -627,6 +627,16 @@ build_full_export <- function(project_id, filters = list(), token = NULL) {
     merged$location_osm <- trimws(merged$location_osm)
   }
 
+  # Coerce any remaining list-columns to character so writexl can handle them.
+  for (col in names(merged)) {
+    if (is.list(merged[[col]])) {
+      merged[[col]] <- vapply(merged[[col]], function(v) {
+        if (is.null(v) || (length(v) == 1 && is.na(v))) NA_character_
+        else paste(as.character(unlist(v)), collapse = "; ")
+      }, character(1))
+    }
+  }
+
   # Reset row names
   rownames(merged) <- NULL
   merged

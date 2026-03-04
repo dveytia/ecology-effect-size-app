@@ -215,15 +215,28 @@ mod_export_server <- function(id, project_id, session_rv) {
       },
       content = function(file) {
         pid <- project_id()
-        req(pid, session_rv$token)
+        tok <- session_rv$token
+        if (is.null(pid) || is.null(tok)) {
+          # Write an empty workbook rather than aborting (which sends HTML)
+          writexl::write_xlsx(data.frame(error = "Session expired – please log in again."), file)
+          return(invisible(NULL))
+        }
         df <- tryCatch(
-          build_full_export(pid, .current_filters(), session_rv$token),
+          build_full_export(pid, .current_filters(), tok),
           error = function(e) {
+            message("[dl_full] export error: ", e$message)
             showNotification(paste("Export error:", e$message), type = "error")
-            data.frame()
+            data.frame(error = paste("Export failed:", e$message))
           }
         )
-        writexl::write_xlsx(df, file)
+        tryCatch(
+          writexl::write_xlsx(df, file),
+          error = function(e) {
+            message("[dl_full] write_xlsx error: ", e$message)
+            # Fallback: write CSV so the user gets *something*
+            utils::write.csv(df, file, row.names = FALSE)
+          }
+        )
       },
       contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
@@ -235,10 +248,15 @@ mod_export_server <- function(id, project_id, session_rv) {
       },
       content = function(file) {
         pid <- project_id()
-        req(pid, session_rv$token)
+        tok <- session_rv$token
+        if (is.null(pid) || is.null(tok)) {
+          writexl::write_xlsx(data.frame(error = "Session expired – please log in again."), file)
+          return(invisible(NULL))
+        }
         df <- tryCatch(
-          build_meta_export(pid, .current_filters(), session_rv$token),
+          build_meta_export(pid, .current_filters(), tok),
           error = function(e) {
+            message("[dl_meta] export error: ", e$message)
             showNotification(paste("Export error:", e$message), type = "error")
             data.frame()
           }
@@ -264,7 +282,11 @@ mod_export_server <- function(id, project_id, session_rv) {
       },
       content = function(file) {
         pid <- project_id()
-        req(pid, session_rv$token)
+        tok <- session_rv$token
+        if (is.null(pid) || is.null(tok)) {
+          writeLines("[]", file)
+          return(invisible(NULL))
+        }
         json_str <- tryCatch(
           build_json_export(pid, .current_filters(), session_rv$token),
           error = function(e) {
