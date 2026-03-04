@@ -217,8 +217,7 @@ mod_export_server <- function(id, project_id, session_rv) {
         pid <- project_id()
         tok <- session_rv$token
         if (is.null(pid) || is.null(tok)) {
-          # Write an empty workbook rather than aborting (which sends HTML)
-          writexl::write_xlsx(data.frame(error = "Session expired – please log in again."), file)
+          writexl::write_xlsx(data.frame(error = "Session expired. Please log in again."), file)
           return(invisible(NULL))
         }
         df <- tryCatch(
@@ -229,14 +228,13 @@ mod_export_server <- function(id, project_id, session_rv) {
             data.frame(error = paste("Export failed:", e$message))
           }
         )
-        tryCatch(
-          writexl::write_xlsx(df, file),
-          error = function(e) {
-            message("[dl_full] write_xlsx error: ", e$message)
-            # Fallback: write CSV so the user gets *something*
-            utils::write.csv(df, file, row.names = FALSE)
-          }
-        )
+        # Write to a temp .xlsx first, then copy to the Shiny-provided path.
+        # This avoids corruption from Shiny Server's temp-file handling
+        # which can mangle binary content when the temp file has no extension.
+        tmp <- tempfile(fileext = ".xlsx")
+        on.exit(unlink(tmp), add = TRUE)
+        writexl::write_xlsx(df, tmp)
+        file.copy(tmp, file, overwrite = TRUE)
       },
       contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
@@ -250,7 +248,7 @@ mod_export_server <- function(id, project_id, session_rv) {
         pid <- project_id()
         tok <- session_rv$token
         if (is.null(pid) || is.null(tok)) {
-          writexl::write_xlsx(data.frame(error = "Session expired – please log in again."), file)
+          writexl::write_xlsx(data.frame(error = "Session expired. Please log in again."), file)
           return(invisible(NULL))
         }
         df <- tryCatch(
@@ -266,11 +264,13 @@ mod_export_server <- function(id, project_id, session_rv) {
             paste0("No rows with a computed effect size match the current filters.")
           showNotification(diag_msg, type = "warning", duration = 15)
         } else if (!is.null(attr(df, "meta_export_msg"))) {
-          # Show flag summary (some rows incomplete but export proceeds)
           showNotification(attr(df, "meta_export_msg"),
                            type = "warning", duration = 12)
         }
-        writexl::write_xlsx(df, file)
+        tmp <- tempfile(fileext = ".xlsx")
+        on.exit(unlink(tmp), add = TRUE)
+        writexl::write_xlsx(df, tmp)
+        file.copy(tmp, file, overwrite = TRUE)
       },
       contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )

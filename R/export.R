@@ -637,6 +637,21 @@ build_full_export <- function(project_id, filters = list(), token = NULL) {
     }
   }
 
+  # Truncate strings exceeding Excel's 32767 character cell limit.
+  # Without this, writexl/libxlsxwriter throws a fatal error.
+  EXCEL_MAX <- 32767L
+  for (col in names(merged)) {
+    if (is.character(merged[[col]])) {
+      long <- which(!is.na(merged[[col]]) & nchar(merged[[col]]) > EXCEL_MAX)
+      if (length(long) > 0) {
+        message(sprintf("[build_full_export] Truncating %d value(s) in '%s' to Excel's 32767-char limit",
+                        length(long), col))
+        merged[[col]][long] <- paste0(substr(merged[[col]][long], 1, EXCEL_MAX - 15),
+                                       "...[TRUNCATED]")
+      }
+    }
+  }
+
   # Reset row names
   rownames(merged) <- NULL
   merged
