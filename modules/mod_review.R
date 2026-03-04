@@ -704,7 +704,7 @@ mod_review_server <- function(id, project_id, session_rv,
           ui_parts[[length(ui_parts) + 1]] <<- div(
             class = "row g-2 review-label-grid",
             tagList(lapply(col_buf, function(el)
-              div(class = "col-md-6", el)))
+              div(class = "col-md-4", el)))
           )
           col_buf <<- list()
         }
