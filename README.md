@@ -179,10 +179,22 @@ readRenviron(".Renviron")
 result <- sb_get("projects", token = Sys.getenv("SUPABASE_SERVICE_KEY"))
 cat("Connection OK. Rows returned:", nrow(result), "\n")
 
-# Test 2: insert a test row, read it back, update it, then delete it
+# Test 2: insert a temporary user row (required by projects foreign key),
+#         then insert a project, read it back, update it, and delete everything
+smoke_user_id <- "00000000-0000-0000-0000-000000000001"
+
+sb_post("users",
+  list(
+    user_id = smoke_user_id,
+    email   = "smoke-test@example.invalid"
+  ),
+  token = Sys.getenv("SUPABASE_SERVICE_KEY")
+)
+cat("Created temporary smoke-test user\n")
+
 test_row <- sb_post("projects",
   list(
-    owner_id    = "00000000-0000-0000-0000-000000000000",
+    owner_id    = smoke_user_id,
     title       = "Smoke Test Project",
     description = "Created by validation gate"
   ),
@@ -204,12 +216,17 @@ cat("Updated description:", updated$description, "\n")
 
 sb_delete("projects", "project_id", test_row$project_id,
   token = Sys.getenv("SUPABASE_SERVICE_KEY"))
+
+sb_delete("users", "user_id", smoke_user_id,
+  token = Sys.getenv("SUPABASE_SERVICE_KEY"))
+
 cat("Deleted OK — Validation Gate 1 PASSED\n")
 ```
 
 **Expected output:**
 ```
 Connection OK. Rows returned: 0
+Created temporary smoke-test user
 Created project_id: <some-uuid>
 Read back title: Smoke Test Project
 Updated description: Updated by smoke test
