@@ -44,6 +44,25 @@ Supabase is a free cloud database and authentication service. It stores all your
 
 > Keep the service_role key private — it has full database access.
 
+### Disable email confirmation (recommended)
+
+By default Supabase requires new users to confirm their email via a link. The confirmation link redirects to the **Site URL** configured in your Supabase project, which defaults to `http://localhost:3000` — a page that doesn't exist for this app. The account is still created and usable, but the broken redirect is confusing.
+
+**Simplest fix — turn off email confirmation:**
+
+1. In the Supabase sidebar, go to **Authentication → Providers → Email**.
+2. Uncheck **"Confirm email"**.
+3. Click **Save**.
+
+New users will be logged in immediately after registering — no confirmation email needed. This is the recommended setting for small research teams with known collaborators.
+
+**Alternative — fix the redirect URL:**
+
+If you prefer to keep email confirmation enabled, update the redirect so the link works:
+
+1. Go to **Authentication → URL Configuration**.
+2. Set **Site URL** to your app's address (e.g. `http://localhost:3838` for local dev, or your deployed URL).
+
 ---
 
 ## 2 — Run the Database Setup Scripts
@@ -65,6 +84,7 @@ These SQL scripts create all the tables, policies, and triggers the app needs.
 | 8 | `sql/08_effect_type_column.sql` | Effect type tracking column |
 | 9 | `sql/09_effect_sizes_delete_policy.sql` | Allow effect size row deletion |
 | 10 | `sql/11_sequence_grants.sql` | Permission for auto-numbering |
+| 11 | `sql/12_fix_projects_rls.sql` | Fix project creation permissions |
 
 Each script should print a green "Success" message. If any script fails, check for typos — scripts must be run in order because later ones depend on earlier ones.
 
@@ -73,6 +93,84 @@ Each script should print a green "Success" message. If any script fails, check f
 Click **Table Editor** in the Supabase sidebar. You should see tables including:
 `users`, `projects`, `project_members`, `labels`, `articles`, `uploads`, `article_metadata_json`, `effect_sizes`, `audit_log`, `duplicate_flags`.
 
+### Verify RLS policies
+
+Click **Authentication -> Policies** in the side bar and verify the following tables match:
+
+`article_metadata_json`
+|NAME|COMMAND|APPLIED TO|
+|----|-------|----------|
+|amj_insert|INSERT|public|
+|amj_select|SELECT|public|
+|amj_update|UPDATE|public|
+
+`articles`
+|NAME|COMMAND|APPLIED TO|
+|----|-------|----------|
+|articles_delete|DELETE|authenticated|
+|articles_insert|INSERT|public|
+|articles_select|SELECT|public|
+|articles_update|UPDATE|public|
+
+`audit_log`
+|NAME|COMMAND|APPLIED TO|
+|----|-------|----------|
+|auditlog_insert|INSERT|public|
+|auditlog_select|SELECT|public|
+
+`duplicate_flags`
+|NAME|COMMAND|APPLIED TO|
+|----|-------|----------|
+|dup_flags_delete|DELETE|authenticated|
+|dup_flags_insert|INSERT|authenticated|
+|dup_flags_select|SELECT|authenticated|
+|dup_flags_update|UPDATE|authenticated|
+
+`effect_sizes`
+|NAME|COMMAND|APPLIED TO|
+|----|-------|----------|
+|es_delete|DELETE|authenticated|
+|es_insert|INSERT|public|
+|es_select|SELECT|public|
+|es_update|UPDATE|public|
+
+`labels`
+|NAME|COMMAND|APPLIED TO|
+|----|-------|----------|
+|labels_delete|DELETE|public|
+|labels_insert|INSERT|public|
+|labels_select|SELECT|public|
+|labels_update|UPDATE|public|
+
+`project_members`
+|NAME|COMMAND|APPLIED TO|
+|----|-------|----------|
+|pm_delete|DELETE|public|
+|pm_insert|INSERT|public|
+|pm_select|SELECT|public|
+
+`projects`
+|NAME|COMMAND|APPLIED TO|
+|----|-------|----------|
+|allow_all_delete|DELETE|authenticated|
+|allow_all_insert|INSERT|authenticated|
+|allow_all_select|SELECT|authenticated|
+|projects_update|UPDATE|authenticated|
+
+`uploads`
+|NAME|COMMAND|APPLIED TO|
+|----|-------|----------|
+|uploads_delete|DELETE|autenticated|
+|uploads_insert|INSERT|public|
+|uploads_select|SELECT|public|
+|uploads_update|UPDATE|authenticated|
+
+`users`
+|NAME|COMMAND|APPLIED TO|
+|----|-------|----------|
+|users_insert|INSERT|public|
+|users_select|SELECT|public|
+|users_update|UPDATE|public|
 ---
 
 ## 3 — Clone the Repository
