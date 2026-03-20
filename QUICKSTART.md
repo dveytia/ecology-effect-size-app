@@ -38,9 +38,9 @@ Supabase is a free cloud database and authentication service. It stores all your
 
 | Value | Where it appears | Looks like |
 |-------|-----------------|------------|
-| **Project URL** | Top of the API page | `https://abcdefghij.supabase.co` |
-| **anon public key** | Under "Project API keys" | `eyJhbGciO…` (long string) |
-| **service_role key** | Under "Project API keys" (click **Reveal**) | `eyJhbGciO…` (another long string) |
+| **Project URL** | Under "API URL" on the "Data API" page | `https://abcdefghij.supabase.co` |
+| **anon public key** | On the "API keys" page | `eyJhbGciO…` (long string) |
+| **service_role key** | On the "API keys" page (click **Reveal**) | `eyJhbGciO…` (another long string) |
 
 > Keep the service_role key private — it has full database access.
 
@@ -91,7 +91,7 @@ Each script should print a green "Success" message. If any script fails, check f
 ### Verify the tables
 
 Click **Table Editor** in the Supabase sidebar. You should see tables including:
-`users`, `projects`, `project_members`, `labels`, `articles`, `uploads`, `article_metadata_json`, `effect_sizes`, `audit_log`, `duplicate_flags`.
+`article_metadata_json`, `articles`, `audit_log`, `duplicate_flags`, `effect_sizes`, `labels`, `project_members`, `projects`, `uploads`, `users`.
 
 ### Verify RLS policies
 
