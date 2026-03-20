@@ -100,23 +100,23 @@ Click **Authentication -> Policies** in the side bar and verify the following ta
 `article_metadata_json`
 |NAME|COMMAND|APPLIED TO|
 |----|-------|----------|
-|amj_insert|INSERT|public|
-|amj_select|SELECT|public|
-|amj_update|UPDATE|public|
+|amj_insert|INSERT|authenticated|
+|amj_select|SELECT|authenticated|
+|amj_update|UPDATE|authenticated|
 
 `articles`
 |NAME|COMMAND|APPLIED TO|
 |----|-------|----------|
 |articles_delete|DELETE|authenticated|
-|articles_insert|INSERT|public|
-|articles_select|SELECT|public|
-|articles_update|UPDATE|public|
+|articles_insert|INSERT|authenticated|
+|articles_select|SELECT|authenticated|
+|articles_update|UPDATE|authenticated|
 
 `audit_log`
 |NAME|COMMAND|APPLIED TO|
 |----|-------|----------|
-|auditlog_insert|INSERT|public|
-|auditlog_select|SELECT|public|
+|auditlog_insert|INSERT|authenticated|
+|auditlog_select|SELECT|authenticated|
 
 `duplicate_flags`
 |NAME|COMMAND|APPLIED TO|
@@ -130,24 +130,24 @@ Click **Authentication -> Policies** in the side bar and verify the following ta
 |NAME|COMMAND|APPLIED TO|
 |----|-------|----------|
 |es_delete|DELETE|authenticated|
-|es_insert|INSERT|public|
-|es_select|SELECT|public|
-|es_update|UPDATE|public|
+|es_insert|INSERT|authenticated|
+|es_select|SELECT|authenticated|
+|es_update|UPDATE|authenticated|
 
 `labels`
 |NAME|COMMAND|APPLIED TO|
 |----|-------|----------|
-|labels_delete|DELETE|public|
-|labels_insert|INSERT|public|
-|labels_select|SELECT|public|
-|labels_update|UPDATE|public|
+|labels_delete|DELETE|authenticated|
+|labels_insert|INSERT|authenticated|
+|labels_select|SELECT|authenticated|
+|labels_update|UPDATE|authenticated|
 
 `project_members`
 |NAME|COMMAND|APPLIED TO|
 |----|-------|----------|
-|pm_delete|DELETE|public|
-|pm_insert|INSERT|public|
-|pm_select|SELECT|public|
+|pm_delete|DELETE|authenticated|
+|pm_insert|INSERT|authenticated|
+|pm_select|SELECT|authenticated|
 
 `projects`
 |NAME|COMMAND|APPLIED TO|
@@ -161,16 +161,16 @@ Click **Authentication -> Policies** in the side bar and verify the following ta
 |NAME|COMMAND|APPLIED TO|
 |----|-------|----------|
 |uploads_delete|DELETE|autenticated|
-|uploads_insert|INSERT|public|
-|uploads_select|SELECT|public|
+|uploads_insert|INSERT|authenticated|
+|uploads_select|SELECT|authenticated|
 |uploads_update|UPDATE|authenticated|
 
 `users`
 |NAME|COMMAND|APPLIED TO|
 |----|-------|----------|
-|users_insert|INSERT|public|
-|users_select|SELECT|public|
-|users_update|UPDATE|public|
+|users_insert|INSERT|authenticated|
+|users_select|SELECT|authenticated|
+|users_update|UPDATE|authenticated|
 ---
 
 ## 3 — Clone the Repository
