@@ -183,7 +183,10 @@ es_control_treatment <- function(input) {
   # -- Fallback: t-statistic --
   if (!is.null(t_stat) && !is.null(df)) {
     r <- t_stat / sqrt(t_stat^2 + df)
-    return(list(r = r, n = n_total, se_r = NULL,
+    # If df is provided but n1/n2 were not, infer n_total from df
+    # For independent samples t-test: df = n_total - 2, so n_total = df + 2
+    effective_n <- if (is.null(n_total) && df > 0) df + 2 else n_total
+    return(list(r = r, n = effective_n, se_r = NULL,
                 status = "calculated", warnings = warnings))
   }
 
@@ -191,7 +194,9 @@ es_control_treatment <- function(input) {
   if (!is.null(f_stat) && !is.null(df)) {
     t_eq <- sqrt(abs(f_stat)) * sign(f_stat)
     r    <- t_eq / sqrt(t_eq^2 + df)
-    return(list(r = r, n = n_total, se_r = NULL,
+    # If df is provided but n1/n2 were not, infer n_total from df
+    effective_n <- if (is.null(n_total) && df > 0) df + 2 else n_total
+    return(list(r = r, n = effective_n, se_r = NULL,
                 status = "calculated", warnings = warnings))
   }
 
