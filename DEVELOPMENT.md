@@ -854,6 +854,15 @@ docker exec ecology-effect-size-app Rscript -e \
 | 2026-02-22 | Phase 10 Export System implemented | `R/export.R` fully implemented: `unnest_labels()` flattens JSONB label groups into wide-format rows, `.flatten_raw_effect()` prefixes raw fields with `raw_`, `build_full_export()` merges articles+labels+effects, `build_meta_export()` renames z→yi / var_z→vi for metafor. `modules/mod_export.R`: owner-only UI with reviewer/status/date/effect_status filters, preview table, Full Export + Meta-Ready CSV downloads. `tests/test_export.R` has 52 passing assertions. `tests/test_map.R`: 1° grid binning + base-R plot (9 assertions pass). |
 | 2026-03-01 | Phase 11 Clone a Project implemented | `clone_labels_to_project()` added to `R/utils.R`; New Project modal in `mod_dashboard.R` updated with "Clone from" dropdown, label preview, and auto-fill description. Labels (single + groups + children) are copied with parent_label_id remapping. Articles, collaborators, and review data are NOT copied. |
 | 2026-03-01 | Phase 12 Audit Log & Polish implemented | `modules/mod_audit_log.R` fully implemented with filters (action/user/date), timestamped table, diff modal. Wired into `mod_project_home.R` (stub replaced). `shinycssloaders` spinners added to article list, review panel, export preview, dashboard, audit log. `shinytoastr` error toasts added via `toast_error/success/warning` helpers in `R/utils.R`; key review actions converted. `global.R` + `DESCRIPTION` updated. CSS polish for audit log and spinner styling. |
+| 2026-03-24 | YYYY-MM-DD fields are automatically populated with today's date, but these should be set to a fill value when empty to avoid error| Not yet resolved |
+| 2026-03-24 | values in bounding box field types are erased on save, and not reliabily re-loaded on refresh. They are blank in the export. | Not yet resolved |
+| 2026-03-24 | values entered and effect size calculated, but values erased on save, even though '[do_save] ES patched for 26e1b760-f483-4a0a-8918-bfb0219b0c7c effect (inst 1): r=0.784723512008352, z=1.05754779718704, status=calculated'. Then because fields are erased on save, if other fields filled afterwards and new save is done, the effect size is patched and erased. | Not yet resolved |
+| 2026-03-24 | Effect size statistics used to calculate effect size are not exported in the json or in the xlsx tables (e.g. fields in Study Design & Statistics) | Not yet resolved |
+| 2026-03-24 | Include ability to filter articles by 'reviewed' status | Not yet resolved |
+| 2026-03-24 | When adding a new instance of a label group, add an option to pre-fill with values from previous group | Not yet resolved |
+| 2026-03-24 | How will effect size calculation flags (e.g., flags when 0 sd approximation is used, or partial Beta) be exported in the export files? | Not yet resolved |
+| 2026-03-24 | Add a bounds check to throw an error when calculated correlation is not between -1 and 1 | Not yet resolved |
+| 2026-03-24 | The 'multiple predictor' option for partial beta in the effect size calculation does not appear to do anything. I still need to enter in N, so N is not being inferred from df | Not yet resolved |
 
 ---
 
