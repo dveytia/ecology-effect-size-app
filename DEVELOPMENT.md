@@ -900,12 +900,12 @@ docker exec ecology-effect-size-app Rscript -e \
 | 2026-03-24 | YYYY-MM-DD fields are automatically populated with today's date, but these should be set to a fill value when empty to avoid error| Not yet resolved |
 | 2026-03-24 | values in bounding box field types are erased on save, and not reliabily re-loaded on refresh. They are blank in the export. | Not yet resolved |
 | 2026-03-24 | values entered and effect size calculated, but values erased on save, even though '[do_save] ES patched for 26e1b760-f483-4a0a-8918-bfb0219b0c7c effect (inst 1): r=0.784723512008352, z=1.05754779718704, status=calculated'. Then because fields are erased on save, if other fields filled afterwards and new save is done, the effect size is patched and erased. | Not yet resolved |
-| 2026-03-24 | Effect size statistics used to calculate effect size are not exported in the json or in the xlsx tables (e.g. fields in Study Design & Statistics) | Not yet resolved |
-| 2026-03-24 | Include ability to filter articles by 'reviewed' status | Not yet resolved |
-| 2026-03-24 | When adding a new instance of a label group, add an option to pre-fill with values from previous group | Not yet resolved |
-| 2026-03-24 | How will effect size calculation flags (e.g., flags when 0 sd approximation is used, or partial Beta) be exported in the export files? | Not yet resolved |
+| 2026-03-24 | Effect size statistics used to calculate effect size are not exported in the json or in the xlsx tables (e.g. fields in Study Design & Statistics) | Resolved, checked on commit id 74f1f29bfe9f5d0fe4c182e555a765747d0d7748 |
+| 2026-03-24 | Include ability to filter articles by 'reviewed' status | Resolved, checked on commit id 74f1f29bfe9f5d0fe4c182e555a765747d0d7748 |
+| 2026-03-24 | When adding a new instance of a label group, add an option to pre-fill with values from previous group | Resolved, checked on commit id 74f1f29bfe9f5d0fe4c182e555a765747d0d7748 |
+| 2026-03-24 | Export does not include effect size calculation flags (e.g., flags when 0 sd approximation is used, or partial Beta) but should be exported in the export files | Resolved, exported in effect_warnings column, checked on commit id 74f1f29bfe9f5d0fe4c182e555a765747d0d7748 |
 | 2026-03-24 | Add a bounds check to throw an error when calculated correlation is not between -1 and 1 | Not yet resolved |
-| 2026-03-24 | The 'multiple predictor' option for partial beta in the effect size calculation does not appear to do anything. I still need to enter in N, so N is not being inferred from df | Not yet resolved |
+| 2026-03-24 | The 'multiple predictor' option for partial beta in the effect size calculation does not appear to do anything. I still need to enter in N, so N is not being inferred from df | Resolved, checked on commit id 74f1f29bfe9f5d0fe4c182e555a765747d0d7748 |
 
 ---
 
