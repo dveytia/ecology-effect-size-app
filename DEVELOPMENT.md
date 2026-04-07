@@ -18,6 +18,49 @@ git checkout main
 git merge phase-N-name --no-ff -m "Phase N: <name> — validation gate passed"
 ```
 
+## Dependency Reproducibility (`renv`)
+
+Use `renv` as the single source of truth for package versions in local dev, CI, and Docker.
+
+### First-time setup (existing repo)
+
+```r
+install.packages("renv")
+renv::restore(prompt = FALSE)
+```
+
+### Create/refresh lockfile (maintainers)
+
+```r
+install.packages("renv")
+renv::init(bare = TRUE)
+renv::settings$package.dependency.fields(c("Imports", "Depends", "LinkingTo", "Suggests"))
+renv::install(c(
+  "shiny", "bslib", "shinyjs", "httr2", "jsonlite", "stringr", "stringdist",
+  "readr", "data.table", "writexl", "shinycssloaders", "shinytoastr",
+  "testthat", "googledrive", "ggplot2", "maps", "sf", "osmdata"
+))
+renv::snapshot(
+  packages = c(
+    "shiny", "bslib", "shinyjs", "httr2", "jsonlite", "stringr", "stringdist",
+    "readr", "data.table", "writexl", "shinycssloaders", "shinytoastr",
+    "testthat", "googledrive", "ggplot2", "maps", "sf", "osmdata"
+  ),
+  prompt = FALSE,
+  force = TRUE
+)
+```
+
+### Keep lockfile healthy
+
+```r
+renv::status()      # check sync between library and lockfile
+renv::restore()     # rebuild local library from lockfile
+renv::snapshot()    # record intentional dependency changes
+```
+
+Commit these files whenever dependencies change: `renv.lock`, `renv/settings.json`, `renv/activate.R`, `.Rprofile`.
+
 ---
 
 ## Phase 1: Project Scaffold & Supabase Connection ✅ (current)
@@ -797,7 +840,7 @@ COPY shiny-server.conf /etc/shiny-server/shiny-server.conf
 | **Image registry** | Push the built image to a container registry (GHCR, ECR, Docker Hub) and deploy from there rather than building on the production host. |
 | **Secret management** | In production, prefer Docker Secrets or a secrets manager (AWS Secrets Manager, HashiCorp Vault) over a plain `.env` file. |
 | **Log rotation** | Configure `logrotate` on the host for the `./logs/shiny-server` volume, or ship logs to a centralised sink (CloudWatch, Loki). |
-| **R package caching** | In CI/CD, cache the Docker layer that installs R packages (the `pak::pak(...)` `RUN` step) by pinning exact package versions so the layer hash is stable across builds. |
+| **R package caching** | In CI/CD, cache the Docker layer that runs `renv::restore()` (using `renv.lock`) so dependency installs are deterministic and cacheable. |
 
 ---
 
@@ -816,12 +859,12 @@ COPY shiny-server.conf /etc/shiny-server/shiny-server.conf
 
 ```bash
 # Verify .Renviron was not copied into the image
-docker run --rm ecology-effect-size-app:latest test -f /srv/shiny-server/ecology-effect-size-app/.Renviron \
+docker run --rm ecology-effect-size-app:${APP_IMAGE_TAG:-dev-local} test -f /srv/shiny-server/ecology-effect-size-app/.Renviron \
   && echo "FAIL: .Renviron found in image" \
   || echo "PASS: .Renviron not in image"
 
 # Verify SUPABASE_SERVICE_KEY is not baked into any image layer
-docker history --no-trunc ecology-effect-size-app:latest | grep -i supabase \
+docker history --no-trunc ecology-effect-size-app:${APP_IMAGE_TAG:-dev-local} | grep -i supabase \
   && echo "FAIL: secret found in history" \
   || echo "PASS: no secrets in image history"
 ```

@@ -9,8 +9,9 @@
 *.Rproj
 
 # ── R dev artefacts ───────────────────────────────────────────
-renv/
-renv.lock
+renv/library/
+renv/local/
+renv/staging/
 .Rhistory
 .RData
 .RDataTmp
