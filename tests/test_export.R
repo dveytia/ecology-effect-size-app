@@ -122,6 +122,31 @@ test_that(".flatten_raw_effect handles nested group_a/group_b", {
   expect_true("raw_group_a_mean_treatment" %in% names(result))
 })
 
+test_that(".extract_jsonb_cell preserves named fields from nested data.frame columns", {
+  nested <- data.frame(
+    study_design = c("control_treatment", "regression"),
+    F_stat = c(NA, 6.411),
+    control_description = c("Control", NA),
+    stringsAsFactors = FALSE
+  )
+  df <- data.frame(article_id = c("a1", "a2"), stringsAsFactors = FALSE)
+  df$raw_effect_json <- nested
+
+  cell <- .extract_jsonb_cell(df, "raw_effect_json", 2)
+  expect_true(is.list(cell))
+  expect_equal(cell$study_design, "regression")
+  expect_equal(cell$F_stat, 6.411)
+})
+
+test_that(".normalise_json_like keeps named raw effect objects", {
+  x <- data.frame(study_design = "regression", F_stat = 6.411,
+                  stringsAsFactors = FALSE)
+  out <- .normalise_json_like(x)
+  expect_true(is.list(out))
+  expect_equal(out$study_design, "regression")
+  expect_equal(out$F_stat, 6.411)
+})
+
 # ==== Tests: unnest_labels ====
 
 test_that("unnest_labels expands group instances into rows", {

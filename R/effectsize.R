@@ -70,6 +70,14 @@ compute_effect_size <- function(input_list) {
   warnings <- res$warnings %||% character(0)
   effect_type <- res$effect_type %||% "zero_order"
 
+  if (!is.null(r) && !is.na(r)) {
+    # Hard guardrail: invalid correlations should fail fast and be surfaced.
+    if (is.nan(r) || is.infinite(r) || r < -1 || r > 1) {
+      stop(sprintf("Computed correlation out of bounds: r = %.6f (must be between -1 and 1)", r),
+           call. = FALSE)
+    }
+  }
+
   # Pathway B returns pre-computed z / var_z; use them directly
   if (!is.null(res$z)) {
     z     <- res$z
@@ -118,6 +126,13 @@ es_control_treatment <- function(input) {
   warnings <- character(0)
   status   <- "calculated"
 
+  .approx_small_sd <- function(mean_value, other_mean = NULL) {
+    sd_val <- 0.01 * abs(mean_value %||% 0)
+    if (sd_val == 0 && !is.null(other_mean)) sd_val <- 0.01 * abs(other_mean)
+    if (sd_val == 0) sd_val <- 0.01
+    sd_val
+  }
+
   m1       <- get_num(input, "mean_control")
   m2       <- get_num(input, "mean_treatment")
   n1       <- get_num(input, "n_control")
@@ -145,6 +160,23 @@ es_control_treatment <- function(input) {
 
     if (!is.null(var_type) && var_type == "IQR") status <- "iqr_sd_used"
 
+    if (isTRUE(input$use_small_sd_approx)) {
+      replaced_any <- FALSE
+      if (is.na(sd1) || sd1 <= 0) {
+        sd1 <- .approx_small_sd(m1, m2)
+        warnings <- c(warnings,
+          "Small SD approximation used for control arm")
+        replaced_any <- TRUE
+      }
+      if (is.na(sd2) || sd2 <= 0) {
+        sd2 <- .approx_small_sd(m2, m1)
+        warnings <- c(warnings,
+          "Small SD approximation used for treatment arm")
+        replaced_any <- TRUE
+      }
+      if (replaced_any) status <- "small_sd_used"
+    }
+
     if (!is.na(sd1) && !is.na(sd2) && sd1 > 0 && sd2 > 0) {
       df_pool <- n1 + n2 - 2
       sd_pool <- sqrt(((n1 - 1) * sd1^2 + (n2 - 1) * sd2^2) / df_pool)
@@ -162,11 +194,11 @@ es_control_treatment <- function(input) {
   if (!is.null(m1) && !is.null(m2) &&
       !is.null(n1) && !is.null(n2) &&
       isTRUE(input$use_small_sd_approx)) {
-    sd1 <- 0.01 * abs(m1)
-    sd2 <- 0.01 * abs(m2)
-    # Protect against zero means
-    if (sd1 == 0) sd1 <- 0.01 * abs(m2)
-    if (sd2 == 0) sd2 <- 0.01 * abs(m1)
+    sd1 <- .approx_small_sd(m1, m2)
+    sd2 <- .approx_small_sd(m2, m1)
+    if (sd1 == 0.01 && m1 == 0 && m2 == 0) {
+      warnings <- c(warnings, "Small SD approximation used absolute floor for zero mean")
+    }
     if (!is.na(sd1) && !is.na(sd2) && sd1 > 0 && sd2 > 0) {
       df_pool <- n1 + n2 - 2
       sd_pool <- sqrt(((n1 - 1) * sd1^2 + (n2 - 1) * sd2^2) / df_pool)
@@ -270,6 +302,18 @@ es_regression <- function(input) {
   p_value   <- get_num(input, "p_value")
   multi     <- isTRUE(input$multiple_predictors)
   k         <- get_num(input, "n_predictors")  # number of predictors
+
+  # Infer sample size from residual df when N is not explicitly entered.
+  # Simple regression: df = N - 2; multiple regression: df = N - k - 1
+  if (is.null(n) && !is.null(df) && df > 0) {
+    if (isTRUE(multi) && !is.null(k) && k > 0) {
+      n <- df + k + 1
+      warnings <- c(warnings, "Sample size inferred from df + k + 1")
+    } else if (!isTRUE(multi)) {
+      n <- df + 2
+      warnings <- c(warnings, "Sample size inferred from df + 2")
+    }
+  }
 
   # Determine effect type
 

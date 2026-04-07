@@ -44,6 +44,23 @@ mod_review_ui <- function(id) {
       )
     ),
 
+    # ---- Review status filter chips ----
+    div(class = "row mb-2",
+      div(class = "col",
+        checkboxGroupInput(
+          ns("review_status_filter"),
+          label = "Filter articles by status",
+          choices = c(
+            "Unreviewed" = "unreviewed",
+            "Reviewed"   = "reviewed",
+            "Skipped"    = "skipped"
+          ),
+          selected = c("unreviewed", "reviewed", "skipped"),
+          inline = TRUE
+        )
+      )
+    ),
+
     # ---- Main layout: article list + review panel -----------
     div(class = "row g-3",
 
@@ -103,6 +120,8 @@ mod_review_server <- function(id, project_id, session_rv,
     dirty              <- reactiveVal(FALSE)
     # Pending article: stores article ID user wants to navigate to
     pending_article    <- reactiveVal(NULL)
+    # Pending group prefix for add-instance modal flow
+    pending_add_group  <- reactiveVal(NULL)
 
     # ---- Simple unique key generator (for non-ES label inputs only) ----
     .new_key <- function() paste0(sample(c(letters[1:6], 0:9), 8, replace = TRUE),
@@ -139,6 +158,13 @@ mod_review_server <- function(id, project_id, session_rv,
     filtered_articles <- reactive({
       df <- all_articles()
       if (!is.data.frame(df) || nrow(df) == 0) return(df)
+
+      statuses <- input$review_status_filter
+      if (!is.null(statuses) && length(statuses) > 0) {
+        df <- df[df$review_status %in% statuses, , drop = FALSE]
+      }
+      if (!is.data.frame(df) || nrow(df) == 0) return(df)
+
       q  <- trimws(tolower(input$search %||% ""))
       if (nchar(q) == 0) return(df)
       # Use ifelse for vectorised NA-safe coercion (not %||% which is scalar-only)
@@ -844,7 +870,13 @@ mod_review_server <- function(id, project_id, session_rv,
         },
 
         "YYYY-MM-DD" = {
-          dv <- tryCatch(as.Date(val1), error = function(e) NULL)
+          dv <- if (!is.null(val1) && !is.na(val1) &&
+                    !identical(as.character(val1), "") &&
+                    !identical(as.character(val1), "NA")) {
+                  tryCatch(as.character(as.Date(val1)), error = function(e) NULL)
+                } else {
+                  NULL
+                }
           dateInput(input_id, lbl_ui, value = dv)
         },
 
@@ -1092,9 +1124,27 @@ mod_review_server <- function(id, project_id, session_rv,
     observeEvent(input$add_instance, {
       gname <- as.character(input$add_instance)[1]
       req(nchar(gname) > 0)
+      pending_add_group(gname)
+      showModal(modalDialog(
+        title = "Add Group Instance",
+        size = "s",
+        easyClose = TRUE,
+        footer = tagList(
+          actionButton(ns("btn_add_blank_instance"),
+                       "Add blank", class = "btn btn-outline-secondary"),
+          actionButton(ns("btn_add_copy_instance"),
+                       "Copy previous", class = "btn btn-primary"),
+          modalButton("Cancel")
+        ),
+        p("Choose how to initialize the new instance.")
+      ))
+    })
+
+    .append_instance <- function(gname, prefill_previous = FALSE) {
       # Snapshot current values before re-render so existing data is preserved
       current_vals <- tryCatch(.collect_values(), error = function(e) list())
       if (length(current_vals) > 0) current_meta(current_vals)
+
       insts <- group_instances()
       if (is.null(insts[[gname]])) insts[[gname]] <- list()
       # Monotonic counter ensures unique deterministic keys even after removal
@@ -1102,8 +1152,40 @@ mod_review_server <- function(id, project_id, session_rv,
       es_instance_counter[[gname]] <<- n
       new_key <- paste0(gname, "_", n)
       insts[[gname]] <- c(insts[[gname]], list(new_key))
+
+      if (isTRUE(prefill_previous)) {
+        if (grepl("__", gname, fixed = TRUE)) {
+          showNotification(
+            "Copy previous is currently supported for top-level groups only; added a blank nested instance.",
+            type = "warning", duration = 6
+          )
+        } else {
+          prev <- current_vals[[gname]]
+          if (is.list(prev) && length(prev) > 0) {
+            current_vals[[gname]][[length(prev) + 1L]] <- prev[[length(prev)]]
+            current_meta(current_vals)
+          }
+        }
+      }
+
       group_instances(insts)
       dirty(TRUE)
+    }
+
+    observeEvent(input$btn_add_blank_instance, {
+      removeModal()
+      gname <- pending_add_group()
+      pending_add_group(NULL)
+      req(gname)
+      .append_instance(gname, prefill_previous = FALSE)
+    })
+
+    observeEvent(input$btn_add_copy_instance, {
+      removeModal()
+      gname <- pending_add_group()
+      pending_add_group(NULL)
+      req(gname)
+      .append_instance(gname, prefill_previous = TRUE)
     })
 
     observeEvent(input$remove_instance, {
@@ -1149,9 +1231,20 @@ mod_review_server <- function(id, project_id, session_rv,
               nested_prefix <- paste0(key, "__", cl$name)
               iv[[cl$name]] <- .collect_group(cl$label_id, nested_prefix)
             } else {
-              raw <- input[[paste0("lbl_", cl$name, "__", key)]]
-              if (!is.null(raw))
-                iv[[cl$name]] <- .coerce_value(cl$variable_type %||% "text", raw)
+              vtype <- as.character(cl$variable_type %||% "text")[1]
+              if (identical(vtype, "bounding_box")) {
+                base <- paste0("lbl_", cl$name, "__", key)
+                iv[[cl$name]] <- list(
+                  lon_min = input[[paste0(base, "_lon_min")]],
+                  lon_max = input[[paste0(base, "_lon_max")]],
+                  lat_min = input[[paste0(base, "_lat_min")]],
+                  lat_max = input[[paste0(base, "_lat_max")]]
+                )
+              } else {
+                raw <- input[[paste0("lbl_", cl$name, "__", key)]]
+                if (!is.null(raw))
+                  iv[[cl$name]] <- .coerce_value(vtype, raw)
+              }
             }
           }
           iv
@@ -1203,6 +1296,14 @@ mod_review_server <- function(id, project_id, session_rv,
         "integer"         = as.integer(val),
         "numeric"         = as.numeric(val),
         "boolean"         = isTRUE(val),
+        "YYYY-MM-DD"      = {
+          if (is.null(val) || (length(val) == 1 &&
+              (is.na(val) || trimws(as.character(val)) == ""))) {
+            "NA"
+          } else {
+            as.character(val)
+          }
+        },
         "select multiple" = as.list(val),
         "openstreetmap_location" = {
           # val is a character vector of JSON strings from selectizeInput
@@ -1432,6 +1533,10 @@ mod_review_server <- function(id, project_id, session_rv,
               message("[effect_size save] error: ", e$message)
             })
 
+            if (!is.null(entry$module$set_raw)) {
+              entry$module$set_raw(es_inputs)
+            }
+
             entry$module$result(computed)
           }
         }
@@ -1493,6 +1598,9 @@ mod_review_server <- function(id, project_id, session_rv,
                                type = "warning")
               message("[effect_size save] error: ", e$message)
             })
+            if (!is.null(es_module$set_raw)) {
+              es_module$set_raw(es_inputs)
+            }
             es_module$result(computed)
           } else {
             es_module$result(NULL)
