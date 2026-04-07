@@ -210,18 +210,46 @@ SUPABASE_SERVICE_KEY=your-service-role-key
 
 ## 5 — Install R Packages
 
+This project uses `renv` for reproducible package versions (including optional/test packages in `Suggests`).
+
 In the RStudio **Console**, paste and run:
 
 ```r
-install.packages(c(
-  "shiny", "bslib", "shinyjs", "httr2",
-  "jsonlite", "stringr", "stringdist",
-  "readr", "data.table", "writexl", "tools",
-  "shinycssloaders", "shinytoastr"
-))
+install.packages("renv")
+renv::restore(prompt = FALSE)
 ```
 
 This may take a few minutes on the first install.
+
+### If You Need To Create a New `renv.lock` (maintainers)
+
+Only do this when creating a new project lockfile or intentionally updating dependencies.
+
+```r
+install.packages("renv")
+renv::init(bare = TRUE)
+renv::settings$package.dependency.fields(c("Imports", "Depends", "LinkingTo", "Suggests"))
+renv::install(c(
+   "shiny", "bslib", "shinyjs", "httr2", "jsonlite", "stringr", "stringdist",
+   "readr", "data.table", "writexl", "shinycssloaders", "shinytoastr",
+   "testthat", "googledrive", "ggplot2", "maps", "sf", "osmdata"
+))
+renv::snapshot(
+   packages = c(
+      "shiny", "bslib", "shinyjs", "httr2", "jsonlite", "stringr", "stringdist",
+      "readr", "data.table", "writexl", "shinycssloaders", "shinytoastr",
+      "testthat", "googledrive", "ggplot2", "maps", "sf", "osmdata"
+   ),
+   prompt = FALSE,
+   force = TRUE
+)
+```
+
+Commit these files after snapshotting:
+- `renv.lock`
+- `renv/settings.json`
+- `renv/activate.R`
+- `.Rprofile`
 
 ---
 

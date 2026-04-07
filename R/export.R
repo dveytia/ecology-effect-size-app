@@ -49,6 +49,57 @@
   }
 }
 
+#' Extract one JSONB cell from a data frame column safely
+#'
+#' Handles list-columns, nested one-row data.frames created by jsonlite
+#' simplification, and scalar character JSON strings.
+.extract_jsonb_cell <- function(df, col_name, row_index) {
+  if (!is.data.frame(df) || !(col_name %in% names(df))) return(NULL)
+  col <- df[[col_name]]
+
+  if (is.data.frame(col)) {
+    if (row_index > nrow(col)) return(NULL)
+    out <- as.list(col[row_index, , drop = FALSE])
+    for (nm in names(out)) {
+      if (is.list(out[[nm]]) && length(out[[nm]]) == 1) {
+        out[[nm]] <- out[[nm]][[1]]
+      }
+    }
+    return(out)
+  }
+
+  if (is.list(col)) {
+    if (row_index > length(col)) return(NULL)
+    return(col[[row_index]])
+  }
+
+  if (row_index > length(col)) return(NULL)
+  col[row_index]
+}
+
+#' Normalise nested JSON-like R objects to named lists for export
+.normalise_json_like <- function(x) {
+  if (is.null(x)) return(NULL)
+  if (is.data.frame(x)) {
+    if (nrow(x) == 1) {
+      out <- as.list(x[1, , drop = FALSE])
+      for (nm in names(out)) out[[nm]] <- .normalise_json_like(out[[nm]])
+      return(out)
+    }
+    return(lapply(seq_len(nrow(x)), function(i)
+      .normalise_json_like(as.list(x[i, , drop = FALSE]))))
+  }
+  if (is.list(x)) {
+    if (!is.null(names(x)) && any(names(x) != "")) {
+      out <- x
+      for (nm in names(out)) out[[nm]] <- .normalise_json_like(out[[nm]])
+      return(out)
+    }
+    return(lapply(x, .normalise_json_like))
+  }
+  x
+}
+
 #' Flatten a single value for export
 #'
 #' Converts lists/vectors to semicolon-separated strings;
@@ -442,7 +493,7 @@ build_full_export <- function(project_id, filters = list(), token = NULL) {
   effects <- tryCatch(
     sb_get("effect_sizes",
       filters = list(article_id = paste0("in.", aid_str)),
-      select  = "effect_id,article_id,group_instance_id,raw_effect_json,r,z,var_z,effect_status,effect_warnings,computed_at",
+      select  = "effect_id,article_id,group_instance_id,raw_effect_json,r,z,var_z,effect_status,effect_type,effect_warnings,computed_at",
       token   = token),
     error = function(e) {
       message("[build_full_export] effect_sizes fetch error: ", e$message)
@@ -502,8 +553,8 @@ build_full_export <- function(project_id, filters = list(), token = NULL) {
   # 6. Flatten raw_effect_json into prefixed columns
   if (is.data.frame(effects) && nrow(effects) > 0) {
     raw_cols_list <- lapply(seq_len(nrow(effects)), function(i) {
-      # Use [[i]] to extract from a list-column (JSONB stored as object)
-      raw_val <- tryCatch(effects$raw_effect_json[[i]], error = function(e) NULL)
+      raw_val <- tryCatch(.extract_jsonb_cell(effects, "raw_effect_json", i),
+                          error = function(e) NULL)
       .flatten_raw_effect(raw_val)
     })
     # Collect all raw_ column names
@@ -856,7 +907,7 @@ build_json_export <- function(project_id, filters = list(), token = NULL) {
   effects <- tryCatch(
     sb_get("effect_sizes",
       filters = list(article_id = paste0("in.", aid_str)),
-      select  = "effect_id,article_id,group_instance_id,raw_effect_json,r,z,var_z,effect_status,effect_warnings,computed_at",
+      select  = "effect_id,article_id,group_instance_id,raw_effect_json,r,z,var_z,effect_status,effect_type,effect_warnings,computed_at",
       token   = token),
     error = function(e) data.frame()
   )
@@ -897,13 +948,20 @@ build_json_export <- function(project_id, filters = list(), token = NULL) {
   # Helper: parse one effect row into a clean list
   .parse_es_row <- function(j) {
     es_row <- as.list(effects[j, ])
-    rj <- tryCatch(effects$raw_effect_json[[j]], error = function(e) NULL)
+    rj <- tryCatch(.extract_jsonb_cell(effects, "raw_effect_json", j),
+                   error = function(e) NULL)
     if (is.list(rj) && length(rj) == 1 && is.null(names(rj))) rj <- rj[[1]]
     if (is.character(rj) && length(rj) == 1) {
       rj <- tryCatch(jsonlite::fromJSON(rj, simplifyVector = FALSE),
                       error = function(e) rj)
     }
-    es_row$raw_effect_json <- rj
+    es_row$raw_effect_json <- .normalise_json_like(rj)
+    raw_flat <- .flatten_raw_effect(rj)
+    if (length(raw_flat) > 0) {
+      for (nm in names(raw_flat)) {
+        es_row[[nm]] <- raw_flat[[nm]]
+      }
+    }
     ew <- tryCatch(effects$effect_warnings[[j]], error = function(e) NULL)
     if (is.list(ew)) ew <- unlist(ew)
     es_row$effect_warnings <- as.list(ew)

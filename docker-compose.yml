@@ -10,14 +10,12 @@
 # Requires a .env file in the same directory (see .env.example).
 # ============================================================
 
-version: "3.9"
-
 services:
   shiny:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ecology-effect-size-app:latest
+    image: ecology-effect-size-app:${APP_IMAGE_TAG:-dev-local}
     container_name: ecology-effect-size-app
     restart: unless-stopped
     ports:

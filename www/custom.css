@@ -100,6 +100,22 @@ body {
   min-height: 60px;
 }
 
+/* ---- Scroll stability in dynamic review panes ------------ */
+/* Shiny re-renders parts of the effect-size block as study-design fields,
+   warnings, and result cards appear. Disabling scroll anchoring there stops
+   the browser from "helpfully" repositioning the viewport mid-scroll. */
+.review-main-panel,
+.effect-size-block,
+.effect-size-block .card,
+.effect-size-block .card-body {
+  overflow-anchor: none;
+}
+
+/* Keep number inputs from feeling twitchy while scrolling. */
+input[type="number"] {
+  touch-action: manipulation;
+}
+
 /* ---- Effect size pathway colour coding ------------------- */
 /* Pathway A – Primary (green tint) */
 .effect-size-block .es-pathway-a,

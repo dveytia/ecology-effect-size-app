@@ -485,6 +485,8 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
     es_result <- reactiveVal(NULL)
     # ---- Stored raw JSON (for repopulating after UI re-render) ----
     stored_raw <- reactiveVal(NULL)
+    # ---- Prevent reactive ping-pong while restoring inputs ----
+    is_restoring <- reactiveVal(FALSE)
 
     # ---- Load existing effect size data when article changes ----
     observeEvent(article_id_reactive(), {
@@ -492,6 +494,7 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
       es_result(NULL)   # clear previous result
       stored_raw(NULL)  # clear previous raw data
       if (is.null(aid)) return()
+      is_restoring(TRUE)
 
       # ALWAYS reset all fields first to prevent stale data from the
       # previous article leaking through.  Fields are then populated from
@@ -663,13 +666,22 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
         message("[mod_effect_size_ui] load error: ", e$message)
         # Fields already reset above; no additional reset needed
       })
+      shinyjs::delay(2400, {
+        is_restoring(FALSE)
+      })
     }, ignoreNULL = FALSE)
 
     # ---- Helper: safely update an input ----
     .update_input_safe <- function(input_id, value) {
       if (is.null(value)) return()
       tryCatch({
+        # Keep updates scalar to avoid coercion warnings and noisy input churn.
+        if (is.atomic(value) && length(value) > 1) value <- value[1]
+        if (is.list(value) || is.data.frame(value)) return()
+
         val <- if (is.logical(value)) value else as.character(value)
+        if (!is.logical(val) && length(val) > 1) val <- val[1]
+
         if (is.logical(val)) {
           updateCheckboxInput(session, input_id, value = isTRUE(val))
         } else {
@@ -678,7 +690,10 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
               grepl("^grp[AB]_(var_statistic_type|beta_type)$", input_id)) {
             updateSelectInput(session, input_id, selected = val)
           } else if (grepl("(mean_|var_value_|n_control|n_treatment|t_stat|F_stat|chi_square|p_value|df|r_reported|se_r|covariance|sd_X|sd_Y|beta|se_beta|interaction_term|se_interaction|n_predictors|^n$)", input_id)) {
-            updateNumericInput(session, input_id, value = as.numeric(val))
+            num_val <- suppressWarnings(as.numeric(val))
+            if (length(num_val) == 1 && !is.na(num_val)) {
+              updateNumericInput(session, input_id, value = num_val)
+            }
           } else {
             updateTextInput(session, input_id, value = val)
           }
@@ -807,6 +822,7 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
 
     # ---- Auto-check interaction_effect when design = "interaction" ----
     observeEvent(input$study_design, {
+      if (isTRUE(is_restoring())) return()
       if (!is.null(input$study_design) && input$study_design == "interaction") {
         updateCheckboxInput(session, "interaction_effect", value = TRUE)
       }
@@ -814,6 +830,7 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
 
     # ---- When interaction_effect is unchecked, reset study_design if it was 'interaction' ----
     observeEvent(input$interaction_effect, {
+      if (isTRUE(is_restoring())) return()
       if (!isTRUE(input$interaction_effect)) {
         if (!is.null(input$study_design) && input$study_design == "interaction") {
           updateSelectInput(session, "study_design", selected = "")
@@ -959,6 +976,8 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
     # ---- Small SD toggle (for control/treatment) ----
     # Shows only when means are present but no variability/test stats
     output$small_sd_panel <- renderUI({
+      if (isTRUE(is_restoring())) return(NULL)
+
       m1  <- input$mean_control
       m2  <- input$mean_treatment
       vst <- input$var_statistic_type %||% ""
@@ -969,8 +988,8 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
       cs  <- input$chi_square_stat
 
       has_means <- !is.null(m1) && !is.na(m1) && !is.null(m2) && !is.na(m2)
-      has_var   <- (nchar(vst) > 0 && !is.null(vc) && !is.na(vc) &&
-                    !is.null(vt) && !is.na(vt))
+      has_var   <- (nchar(vst) > 0 && !is.null(vc) && !is.na(vc) && vc > 0 &&
+            !is.null(vt) && !is.na(vt) && vt > 0)
       has_test  <- (!is.null(ts) && !is.na(ts)) ||
                    (!is.null(fs) && !is.na(fs)) ||
                    (!is.null(cs) && !is.na(cs))
@@ -1000,6 +1019,8 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
     })
 
     .render_small_sd_for_group <- function(prefix) {
+      if (isTRUE(is_restoring())) return(NULL)
+
       m1  <- input[[paste0(prefix, "mean_control")]]
       m2  <- input[[paste0(prefix, "mean_treatment")]]
       vst <- input[[paste0(prefix, "var_statistic_type")]] %||% ""
@@ -1010,8 +1031,8 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
       cs  <- input[[paste0(prefix, "chi_square_stat")]]
 
       has_means <- !is.null(m1) && !is.na(m1) && !is.null(m2) && !is.na(m2)
-      has_var   <- (nchar(vst) > 0 && !is.null(vc) && !is.na(vc) &&
-                    !is.null(vt) && !is.na(vt))
+      has_var   <- (nchar(vst) > 0 && !is.null(vc) && !is.na(vc) && vc > 0 &&
+            !is.null(vt) && !is.na(vt) && vt > 0)
       has_test  <- (!is.null(ts) && !is.na(ts)) ||
                    (!is.null(fs) && !is.na(fs)) ||
                    (!is.null(cs) && !is.na(cs))
@@ -1358,8 +1379,10 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
     # it here: ignoreInit = TRUE skips the first render (handled by the
     # article-load observer), so this fires only on RE-renders.
     observeEvent(input$ui_render_token, {
+      if (isTRUE(is_restoring())) return()
       raw <- stored_raw()
       if (is.null(raw) || length(raw) == 0) return()
+      is_restoring(TRUE)
       # Also restore the computed result badge
       # Same phased restore as the initial load, but without DB roundtrip
       shinyjs::delay(600, {
@@ -1396,12 +1419,20 @@ mod_effect_size_ui_server <- function(id, session_rv, article_id_reactive,
           }
         })
       })
+        shinyjs::delay(2200, {
+          is_restoring(FALSE)
+        })
     }, ignoreInit = TRUE)
 
     # ---- Return reactive: collected inputs (for the parent module) ----
+    set_raw_inputs <- function(raw) {
+      stored_raw(raw)
+    }
+
     return(list(
       collect_inputs = collect_es_inputs,
-      result         = es_result
+      result         = es_result,
+      set_raw        = set_raw_inputs
     ))
   })
 }

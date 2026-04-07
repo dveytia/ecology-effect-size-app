@@ -46,3 +46,18 @@ $(document).on('shiny:value', function () {
 Shiny.addCustomMessageHandler('reinit_tooltips', function (msg) {
   initTooltips();
 });
+
+// Prevent mouse-wheel changes on numeric inputs while scrolling through
+// large Shiny forms like the effect-size panel. Without this, hovering a
+// numericInput can change its value instead of scrolling the page, which
+// makes the review pane feel jumpy and unstable.
+if (!window.__numericWheelGuardBound) {
+  document.addEventListener('wheel', function (e) {
+    var el = e.target;
+    if (el && el.matches && el.matches('input[type="number"]')) {
+      el.blur();
+    }
+  }, { capture: true, passive: true });
+
+  window.__numericWheelGuardBound = true;
+}

@@ -291,6 +291,37 @@ test_that("Small SD flag: means-only with approx -> small_sd_used", {
   expect_true(any(grepl("Small SD", result$effect_warnings)))
 })
 
+test_that("Small SD flag still works when both means are zero", {
+  result <- compute_effect_size(list(
+    study_design         = "control_treatment",
+    mean_control         = 0,
+    mean_treatment       = 0,
+    n_control            = 20,
+    n_treatment          = 20,
+    use_small_sd_approx  = TRUE
+  ))
+  expect_equal(result$effect_status, "small_sd_used")
+  expect_equal(result$r, 0)
+  expect_true(any(grepl("absolute floor", result$effect_warnings)))
+})
+
+test_that("Small SD can replace only the invalid arm when one SD is zero", {
+  result <- compute_effect_size(list(
+    study_design         = "control_treatment",
+    mean_control         = 0,
+    mean_treatment       = 0.4967,
+    var_statistic_type   = "SD",
+    var_value_control    = 0,
+    var_value_treatment  = 0.1369,
+    n_control            = 3,
+    n_treatment          = 3,
+    use_small_sd_approx  = TRUE
+  ))
+  expect_equal(result$effect_status, "small_sd_used")
+  expect_false(is.null(result$r))
+  expect_true(any(grepl("control arm", result$effect_warnings)))
+})
+
 # ============================================================
 # Test 11 — Insufficient data
 # Only p_value=0.03 provided  →  r=NULL, effect_status=insufficient_data
@@ -319,5 +350,35 @@ test_that("time_trend routes to regression engine", {
   expected_r <- 3.0 / sqrt(3.0^2 + 48)
   expect_equal(round(result$r, 4), round(expected_r, 4))
   expect_equal(result$effect_status, "calculated")
+})
+
+# ============================================================
+# Bonus — infer N from df and k for multiple regression
+# ============================================================
+test_that("Multiple regression infers N from df and k", {
+  result <- compute_effect_size(list(
+    study_design        = "regression",
+    multiple_predictors = TRUE,
+    n_predictors        = 3,
+    t_stat              = 2.2,
+    df                  = 27
+  ))
+  # N should be inferred as df + k + 1 = 31, so var_z = 1/(31-3)
+  expect_equal(round(result$var_z, 6), round(1 / 28, 6))
+  expect_true(any(grepl("inferred", result$effect_warnings)))
+})
+
+# ============================================================
+# Bonus — bounds check for invalid correlation values
+# ============================================================
+test_that("Out-of-bounds r throws clear error", {
+  expect_error(
+    compute_effect_size(list(
+      study_design = "correlation",
+      r_reported   = 1.2,
+      n            = 40
+    )),
+    "out of bounds"
+  )
 })
 

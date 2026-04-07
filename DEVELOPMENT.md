@@ -18,6 +18,49 @@ git checkout main
 git merge phase-N-name --no-ff -m "Phase N: <name> — validation gate passed"
 ```
 
+## Dependency Reproducibility (`renv`)
+
+Use `renv` as the single source of truth for package versions in local dev, CI, and Docker.
+
+### First-time setup (existing repo)
+
+```r
+install.packages("renv")
+renv::restore(prompt = FALSE)
+```
+
+### Create/refresh lockfile (maintainers)
+
+```r
+install.packages("renv")
+renv::init(bare = TRUE)
+renv::settings$package.dependency.fields(c("Imports", "Depends", "LinkingTo", "Suggests"))
+renv::install(c(
+  "shiny", "bslib", "shinyjs", "httr2", "jsonlite", "stringr", "stringdist",
+  "readr", "data.table", "writexl", "shinycssloaders", "shinytoastr",
+  "testthat", "googledrive", "ggplot2", "maps", "sf", "osmdata"
+))
+renv::snapshot(
+  packages = c(
+    "shiny", "bslib", "shinyjs", "httr2", "jsonlite", "stringr", "stringdist",
+    "readr", "data.table", "writexl", "shinycssloaders", "shinytoastr",
+    "testthat", "googledrive", "ggplot2", "maps", "sf", "osmdata"
+  ),
+  prompt = FALSE,
+  force = TRUE
+)
+```
+
+### Keep lockfile healthy
+
+```r
+renv::status()      # check sync between library and lockfile
+renv::restore()     # rebuild local library from lockfile
+renv::snapshot()    # record intentional dependency changes
+```
+
+Commit these files whenever dependencies change: `renv.lock`, `renv/settings.json`, `renv/activate.R`, `.Rprofile`.
+
 ---
 
 ## Phase 1: Project Scaffold & Supabase Connection ✅ (current)
@@ -797,7 +840,7 @@ COPY shiny-server.conf /etc/shiny-server/shiny-server.conf
 | **Image registry** | Push the built image to a container registry (GHCR, ECR, Docker Hub) and deploy from there rather than building on the production host. |
 | **Secret management** | In production, prefer Docker Secrets or a secrets manager (AWS Secrets Manager, HashiCorp Vault) over a plain `.env` file. |
 | **Log rotation** | Configure `logrotate` on the host for the `./logs/shiny-server` volume, or ship logs to a centralised sink (CloudWatch, Loki). |
-| **R package caching** | In CI/CD, cache the Docker layer that installs R packages (the `pak::pak(...)` `RUN` step) by pinning exact package versions so the layer hash is stable across builds. |
+| **R package caching** | In CI/CD, cache the Docker layer that runs `renv::restore()` (using `renv.lock`) so dependency installs are deterministic and cacheable. |
 
 ---
 
@@ -816,12 +859,12 @@ COPY shiny-server.conf /etc/shiny-server/shiny-server.conf
 
 ```bash
 # Verify .Renviron was not copied into the image
-docker run --rm ecology-effect-size-app:latest test -f /srv/shiny-server/ecology-effect-size-app/.Renviron \
+docker run --rm ecology-effect-size-app:${APP_IMAGE_TAG:-dev-local} test -f /srv/shiny-server/ecology-effect-size-app/.Renviron \
   && echo "FAIL: .Renviron found in image" \
   || echo "PASS: .Renviron not in image"
 
 # Verify SUPABASE_SERVICE_KEY is not baked into any image layer
-docker history --no-trunc ecology-effect-size-app:latest | grep -i supabase \
+docker history --no-trunc ecology-effect-size-app:${APP_IMAGE_TAG:-dev-local} | grep -i supabase \
   && echo "FAIL: secret found in history" \
   || echo "PASS: no secrets in image history"
 ```
@@ -857,12 +900,12 @@ docker exec ecology-effect-size-app Rscript -e \
 | 2026-03-24 | YYYY-MM-DD fields are automatically populated with today's date, but these should be set to a fill value when empty to avoid error| Not yet resolved |
 | 2026-03-24 | values in bounding box field types are erased on save, and not reliabily re-loaded on refresh. They are blank in the export. | Not yet resolved |
 | 2026-03-24 | values entered and effect size calculated, but values erased on save, even though '[do_save] ES patched for 26e1b760-f483-4a0a-8918-bfb0219b0c7c effect (inst 1): r=0.784723512008352, z=1.05754779718704, status=calculated'. Then because fields are erased on save, if other fields filled afterwards and new save is done, the effect size is patched and erased. | Not yet resolved |
-| 2026-03-24 | Effect size statistics used to calculate effect size are not exported in the json or in the xlsx tables (e.g. fields in Study Design & Statistics) | Not yet resolved |
-| 2026-03-24 | Include ability to filter articles by 'reviewed' status | Not yet resolved |
-| 2026-03-24 | When adding a new instance of a label group, add an option to pre-fill with values from previous group | Not yet resolved |
-| 2026-03-24 | How will effect size calculation flags (e.g., flags when 0 sd approximation is used, or partial Beta) be exported in the export files? | Not yet resolved |
+| 2026-03-24 | Effect size statistics used to calculate effect size are not exported in the json or in the xlsx tables (e.g. fields in Study Design & Statistics) | Resolved, checked on commit id 74f1f29bfe9f5d0fe4c182e555a765747d0d7748 |
+| 2026-03-24 | Include ability to filter articles by 'reviewed' status | Resolved, checked on commit id 74f1f29bfe9f5d0fe4c182e555a765747d0d7748 |
+| 2026-03-24 | When adding a new instance of a label group, add an option to pre-fill with values from previous group | Resolved, checked on commit id 74f1f29bfe9f5d0fe4c182e555a765747d0d7748 |
+| 2026-03-24 | Export does not include effect size calculation flags (e.g., flags when 0 sd approximation is used, or partial Beta) but should be exported in the export files | Resolved, exported in effect_warnings column, checked on commit id 74f1f29bfe9f5d0fe4c182e555a765747d0d7748 |
 | 2026-03-24 | Add a bounds check to throw an error when calculated correlation is not between -1 and 1 | Not yet resolved |
-| 2026-03-24 | The 'multiple predictor' option for partial beta in the effect size calculation does not appear to do anything. I still need to enter in N, so N is not being inferred from df | Not yet resolved |
+| 2026-03-24 | The 'multiple predictor' option for partial beta in the effect size calculation does not appear to do anything. I still need to enter in N, so N is not being inferred from df | Resolved, checked on commit id 74f1f29bfe9f5d0fe4c182e555a765747d0d7748 |
 
 ---
 
