@@ -11,6 +11,7 @@ Get the Ecological Effect Size Coding Platform running on your computer in about
 | **R** (version 4.3 or newer) | https://cloud.r-project.org |
 | **RStudio Desktop** | https://posit.co/download/rstudio-desktop |
 | **Git** | https://git-scm.com/downloads |
+| **Docker Desktop** *(optional, for container run)* | https://www.docker.com/products/docker-desktop |
 | A free **Supabase** account | https://supabase.com |
 | *(Optional)* A **Google Cloud** account | https://console.cloud.google.com |
 
@@ -210,16 +211,58 @@ SUPABASE_SERVICE_KEY=your-service-role-key
 
 ## 5 — Install R Packages
 
-This project uses `renv` for reproducible package versions (including optional/test packages in `Suggests`).
+If you prefer to run the app in Docker instead of local R/RStudio, skip to **Step 5B**.
+
+### 5A — Local R/RStudio (default)
+
+This project uses `renv` for reproducible package versions.
+
+Before restoring packages, check your R version:
+
+```r
+R.version.string
+```
+
+The lockfile in this repo was created with **R 4.5.0**. Restoring with an older R can fail for some dependencies.
 
 In the RStudio **Console**, paste and run:
 
 ```r
 install.packages("renv")
+renv::consent(provided = TRUE)
+
+# Beginner-safe path: install only packages needed to run the app UI.
+runtime_pkgs <- c(
+   "shiny", "bslib", "shinyjs", "httr2", "jsonlite", "stringr", "stringdist",
+   "readr", "data.table", "writexl", "shinycssloaders", "shinytoastr"
+)
+renv::restore(packages = runtime_pkgs, prompt = FALSE)
+```
+
+This usually takes a few minutes on first install.
+
+If you want the full developer/test stack later, run:
+
+```r
 renv::restore(prompt = FALSE)
 ```
 
-This may take a few minutes on the first install.
+If `renv::restore()` fails:
+
+1. Update R to 4.5.x and restart RStudio.
+2. Update renv and try again:
+
+```r
+install.packages("renv")
+renv::restore(packages = runtime_pkgs, prompt = FALSE)
+```
+
+3. If your internet/proxy is unstable, retry once after setting CRAN explicitly:
+
+```r
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+renv::restore(packages = runtime_pkgs, prompt = FALSE)
+```
 
 ### If You Need To Create a New `renv.lock` (maintainers)
 
@@ -250,6 +293,45 @@ Commit these files after snapshotting:
 - `renv/settings.json`
 - `renv/activate.R`
 - `.Rprofile`
+
+### 5B — Docker image (alternative)
+
+Use this path if you want the app and package environment fully containerised.
+
+1. In the project root, copy `.env.example` to `.env`.
+2. Open `.env` and set at least:
+
+```
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_KEY=your-anon-public-key
+SUPABASE_SERVICE_KEY=your-service-role-key
+APP_IMAGE_TAG=dev-local
+```
+
+3. *(Optional)* Set `GOOGLE_API_KEY` in `.env` for Drive sync.
+4. Build and start the container:
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+5. Open the app at `http://localhost:3838/ecology-effect-size-app`.
+6. View logs if needed:
+
+```bash
+docker compose logs -f shiny
+```
+
+7. Stop the app:
+
+```bash
+docker compose down
+```
+
+Notes:
+- Docker reads credentials from `.env` (not `.Renviron`).
+- If you update dependencies and `renv.lock`, rebuild the image: `docker compose build --no-cache`.
 
 ---
 
@@ -378,6 +460,185 @@ GOOGLE_API_KEY=AIza...your-key-here
 5. Click **Save Changes**.
 
 After syncing, PDFs will appear in the Review tab when you open an article that has a linked file.
+
+---
+
+## 11 — Share the Docker Image with Another User or Server
+
+There are two common ways to send this app image to someone:
+
+1. Push to a container registry (best for teams and updates)
+2. Export a `.tar` image file (best for offline transfer)
+
+### Before sharing: keep `.env` private
+
+- Never commit `.env` to git.
+- This repo already protects secrets:
+   - `.env` is ignored by `.gitignore`
+   - `.env` is excluded from Docker build context by `.dockerignore`
+- Share `.env.example` with collaborators and have them create their own `.env`.
+
+Quick checks before publishing:
+
+```bash
+git status --short
+git check-ignore -v .env
+```
+
+The second command should show `.gitignore` as the ignore source.
+
+### Option A — Publish to a Registry
+
+#### A1. Docker Hub example
+
+On your machine:
+
+```bash
+# Set your values
+export DOCKERHUB_USER="yourdockerhubuser"
+export IMAGE="ecology-effect-size-app"
+export VERSION="2026-04-08"
+
+# Build and tag
+docker build -t ${DOCKERHUB_USER}/${IMAGE}:${VERSION} .
+docker tag ${DOCKERHUB_USER}/${IMAGE}:${VERSION} ${DOCKERHUB_USER}/${IMAGE}:latest
+
+# Login and push
+docker login
+docker push ${DOCKERHUB_USER}/${IMAGE}:${VERSION}
+docker push ${DOCKERHUB_USER}/${IMAGE}:latest
+```
+
+On the new server:
+
+```bash
+export DOCKERHUB_USER="yourdockerhubuser"
+export IMAGE="ecology-effect-size-app"
+export VERSION="2026-04-08"
+
+# Pull exact version
+docker pull ${DOCKERHUB_USER}/${IMAGE}:${VERSION}
+
+# Create env file from template and edit secrets
+cp .env.example .env
+
+# Run with explicit env file
+docker run -d \
+   --name ecology-effect-size-app \
+   --env-file .env \
+   -p 3838:3838 \
+   ${DOCKERHUB_USER}/${IMAGE}:${VERSION}
+```
+
+#### A2. GHCR example (GitHub Container Registry)
+
+On your machine:
+
+```bash
+# Set your values
+export GH_USER="dveytia"
+export REPO="ecology-effect-size-app"
+export VERSION="2026-04-21"
+export IMAGE="ghcr.io/${GH_USER}/${REPO}"
+
+# Build with OCI labels so GHCR can associate package metadata
+# SOURCE should be your GitHub repository URL
+docker build \
+   --label org.opencontainers.image.source="https://github.com/${GH_USER}/${REPO}" \
+   --label org.opencontainers.image.version="${VERSION}" \
+   -t ${IMAGE}:${VERSION} \
+   -t ${IMAGE}:latest \
+   .
+
+# Login to GHCR (GitHub PAT needs: write:packages, read:packages) 
+# (only need to run this the first time and then credentials are stored)
+echo "YOUR_GITHUB_PAT" | docker login ghcr.io -u ${GH_USER} --password-stdin
+
+
+# Push both version and latest tags
+docker push ${IMAGE}:${VERSION}
+docker push ${IMAGE}:latest
+```
+
+On the new server:
+
+```bash
+export GH_USER="your-github-username"
+export REPO="ecology-effect-size-app"
+export VERSION="2026-04-08"
+export IMAGE="ghcr.io/${GH_USER}/${REPO}"
+
+# If package is private, login first
+echo "YOUR_GITHUB_PAT" | docker login ghcr.io -u ${GH_USER} --password-stdin
+
+# Pull exact version
+docker pull ${IMAGE}:${VERSION}
+
+# Create env file from template and edit secrets
+cp .env.example .env
+
+# Run with explicit env file
+docker run -d \
+   --name ecology-effect-size-app \
+   --env-file .env \
+   -p 3838:3838 \
+   ${IMAGE}:${VERSION}
+```
+
+GHCR notes on versions and repository association:
+
+- Each tag (for example `2026-04-08`, `latest`) is published as a package version.
+- To associate a GHCR container with a repository, use the label:
+   - `org.opencontainers.image.source=https://github.com/OWNER/REPO`
+- After first push, open GitHub: **Repository -> Packages -> package -> Package settings**:
+   - Confirm linked repository
+   - Set visibility (private/public)
+   - Grant access permissions if needed
+
+If using Compose on the new server:
+
+```bash
+docker compose --env-file .env pull
+docker compose --env-file .env up -d
+```
+
+### Option B — Send a `.tar` Image File (Offline)
+
+On your machine:
+
+```bash
+# 1) Build and tag
+docker build -t ecology-effect-size-app:2026-04-08 .
+
+# 2) Export image to a tar file
+docker save -o ecology-effect-size-app_2026-04-08.tar ecology-effect-size-app:2026-04-08
+```
+
+Transfer `ecology-effect-size-app_2026-04-08.tar` to the target server (USB, SCP, cloud drive, etc.).
+
+On the new server:
+
+```bash
+# 1) Import image
+docker load -i ecology-effect-size-app_2026-04-08.tar
+
+# 2) Create env file from template and edit secrets
+cp .env.example .env
+
+# 3) Run with explicit env file
+docker run -d \
+   --name ecology-effect-size-app \
+   --env-file .env \
+   -p 3838:3838 \
+   ecology-effect-size-app:2026-04-08
+```
+
+### Optional hardening for shared servers
+
+```bash
+# Restrict file permissions so only owner can read .env
+chmod 600 .env
+```
 
 ---
 

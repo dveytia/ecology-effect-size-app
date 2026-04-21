@@ -664,17 +664,11 @@ mod_dashboard_server <- function(id, session_rv, app_state) {
       }
 
       tryCatch({
-        # Use service key to search users table (bypasses per-user RLS).
-        # The service key is only available server-side in .Renviron;
-        # it is never sent to the browser.
-        svc <- Sys.getenv("SUPABASE_SERVICE_KEY")
-        if (nchar(svc) == 0)
-          stop("SUPABASE_SERVICE_KEY is not configured on this server.")
-
-        user_rows <- sb_get("users",
-                            filters = list(email = email),
-                            select  = "user_id,email",
-                            token   = svc)
+        # Use service-role credentials to search users table
+        # (bypasses per-user RLS policy on users_select).
+        user_rows <- sb_get_service("users",
+                                    filters = list(email = email),
+                                    select  = "user_id,email")
 
         if (is.null(user_rows) || !is.data.frame(user_rows) ||
             nrow(user_rows) == 0) {

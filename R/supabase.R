@@ -31,11 +31,12 @@
 # req_error() is disabled so httr2 never auto-throws on 4xx/5xx —
 # .sb_parse() handles error detection and extracts the Supabase
 # error body (message, hint, code) for informative error messages.
-.sb_base_req <- function(path, token = NULL) {
+.sb_base_req <- function(path, token = NULL, apikey = NULL) {
   key <- if (!is.null(token)) token else .sb_anon_key()
+  api_key <- if (!is.null(apikey)) apikey else .sb_anon_key()
   httr2::request(paste0(.sb_url(), path)) |>
     httr2::req_headers(
-      "apikey"        = .sb_anon_key(),   # always needed
+      "apikey"        = api_key,
       "Authorization" = paste("Bearer", key),
       "Content-Type"  = "application/json",
       "Prefer"        = "return=representation"
@@ -228,6 +229,44 @@ sb_rpc <- function(fn_name, params = list(), token = NULL) {
     httr2::req_method("POST")
   resp <- httr2::req_perform(req)
   .sb_parse(resp)
+}
+
+# Validate and return SUPABASE_SERVICE_KEY.
+.sb_service_key <- function() {
+  key <- trimws(Sys.getenv("SUPABASE_SERVICE_KEY"))
+  if (nchar(key) == 0) {
+    stop("SUPABASE_SERVICE_KEY is not set in .Renviron")
+  }
+  # Supabase JWTs are three dot-separated base64url segments.
+  if (!grepl("^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$", key)) {
+    stop("SUPABASE_SERVICE_KEY is not a valid JWT (expected 3 dot-separated parts).")
+  }
+  key
+}
+
+#' GET rows from a table using service-role credentials
+#'
+#' Use for server-side admin operations that must bypass user-level RLS.
+#'
+#' @param table   Table name (character)
+#' @param filters Named list of column = value pairs for WHERE clause
+#' @param select  Comma-separated column names (default "*")
+#' @return        Data frame (possibly 0 rows)
+sb_get_service <- function(table, filters = list(), select = "*") {
+  svc <- .sb_service_key()
+  req <- .sb_base_req(
+    paste0("/rest/v1/", table),
+    token = svc,
+    apikey = svc
+  ) |>
+    httr2::req_url_query(select = select,
+                         !!!.sb_filters_to_params(filters))
+  resp <- httr2::req_perform(req)
+  result <- .sb_parse(resp)
+  if (is.list(result) && length(result) == 0) {
+    return(data.frame())
+  }
+  result
 }
 
 # ---- Authentication functions --------------------------------

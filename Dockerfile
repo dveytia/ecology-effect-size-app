@@ -46,12 +46,9 @@ WORKDIR /srv/shiny-server/ecology-effect-size-app
 COPY renv.lock renv.lock
 COPY renv/activate.R renv/settings.json renv/
 
-# Install locked packages into the image site-library so shiny-server workers
-# can load them without relying on renv activation at runtime.
-RUN R -e "renv::consent(provided = TRUE); renv::restore(library = .Library.site[[1]], prompt = FALSE)"
-
-# Ensure direct runtime and optional/test packages from this app are present.
-RUN R -e "required <- c('shiny','bslib','shinyjs','httr2','jsonlite','stringr','stringdist','readr','data.table','writexl','shinycssloaders','shinytoastr','testthat','googledrive','ggplot2','maps','sf','osmdata'); renv::restore(packages = required, library = .Library.site[[1]], prompt = FALSE); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop(sprintf('Missing required package(s): %s', paste(missing, collapse = ', ')))"
+# Install only runtime packages needed by the app from the lockfile.
+# This avoids pulling optional/test stacks in Suggests during image build.
+RUN R -e "required <- c('shiny','bslib','shinyjs','httr2','jsonlite','stringr','stringdist','readr','data.table','writexl','shinycssloaders','shinytoastr'); renv::consent(provided = TRUE); renv::restore(packages = required, library = .Library.site[[1]], prompt = FALSE); missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]; if (length(missing)) stop(sprintf('Missing required package(s): %s', paste(missing, collapse = ', ')))"
 
 # ── Copy application source ───────────────────────────────────────────────────
 COPY . .
