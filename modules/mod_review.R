@@ -84,6 +84,7 @@ mod_review_ui <- function(id) {
 
       # ---- Right: review panel (always visible, full width on small) --
       div(class = "col-lg-9 col-12 review-main-panel",
+        uiOutput(ns("presence_banner")),
         shinycssloaders::withSpinner(
           uiOutput(ns("review_panel")),
           type = 6, color = "#2C7A4B", size = 0.5
@@ -122,10 +123,72 @@ mod_review_server <- function(id, project_id, session_rv,
     pending_article    <- reactiveVal(NULL)
     # Pending group prefix for add-instance modal flow
     pending_add_group  <- reactiveVal(NULL)
+    # Reviewer presence refresh signal
+    presence_refresh   <- reactiveVal(0)
+    # If presence backend is unavailable, disable feature for this session.
+    presence_enabled   <- reactiveVal(TRUE)
+
+    presence_heartbeat_secs <- 20
+    presence_active_window_secs <- 90
 
     # ---- Simple unique key generator (for non-ES label inputs only) ----
     .new_key <- function() paste0(sample(c(letters[1:6], 0:9), 8, replace = TRUE),
                                    collapse = "")
+
+    .presence_label <- function() {
+      lbl <- trimws(as.character(session_rv$username %||% ""))
+      if (nchar(lbl) == 0) lbl <- "Reviewer"
+      lbl
+    }
+
+    .disable_presence <- function(msg = NULL) {
+      if (isTRUE(presence_enabled())) {
+        presence_enabled(FALSE)
+        if (!is.null(msg) && nchar(msg) > 0) {
+          showNotification(
+            paste(
+              "Live reviewer presence is temporarily unavailable:",
+              msg,
+              "Project review will continue normally."
+            ),
+            type = "warning",
+            duration = 8
+          )
+        }
+      }
+      invisible(NULL)
+    }
+
+    .upsert_presence <- function() {
+      if (!isTRUE(presence_enabled())) return(invisible(FALSE))
+      pid <- project_id()
+      uid <- session_rv$user_id
+      tok <- session_rv$token
+      aid <- current_article_id()
+      if (is.null(pid) || is.null(uid) || is.null(tok) || is.null(aid)) {
+        return(invisible(FALSE))
+      }
+
+      body <- list(
+        project_id         = pid,
+        user_id            = uid,
+        reviewer_label     = .presence_label(),
+        current_article_id = aid,
+        last_seen          = format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+      )
+
+      tryCatch({
+        sb_upsert("reviewer_presence",
+                  body,
+                  on_conflict = "project_id,user_id",
+                  token = tok)
+        TRUE
+      }, error = function(e) {
+        message("[reviewer_presence] upsert failed: ", e$message)
+        .disable_presence(e$message)
+        FALSE
+      })
+    }
 
     # --------------------------------------------------------
     # Data loading
@@ -176,6 +239,54 @@ mod_review_server <- function(id, project_id, session_rv,
                 grepl(q, id_col, fixed = TRUE)
       df[mask, , drop = FALSE]
     })
+
+    active_other_reviewers <- reactive({
+      if (!isTRUE(presence_enabled())) return(data.frame())
+      presence_refresh()
+      pid <- project_id()
+      uid <- session_rv$user_id
+      tok <- session_rv$token
+      aid <- current_article_id()
+      req(pid, uid, tok, aid)
+
+      active_since <- format(
+        Sys.time() - presence_active_window_secs,
+        "%Y-%m-%dT%H:%M:%SZ",
+        tz = "UTC"
+      )
+
+      tryCatch({
+        rows <- sb_get(
+          "reviewer_presence",
+          filters = list(
+            project_id = pid,
+            user_id = paste0("neq.", uid),
+            last_seen = paste0("gt.", active_since)
+          ),
+          select = "user_id,reviewer_label,current_article_id,last_seen",
+          token = tok
+        )
+        if (!is.data.frame(rows) || nrow(rows) == 0) return(data.frame())
+        rows
+      }, error = function(e) {
+        message("[reviewer_presence] fetch failed: ", e$message)
+        .disable_presence(e$message)
+        data.frame()
+      })
+    })
+
+    observe({
+      invalidateLater(presence_heartbeat_secs * 1000, session)
+      if (isTRUE(.upsert_presence())) {
+        isolate(presence_refresh(presence_refresh() + 1L))
+      }
+    })
+
+    observeEvent(current_article_id(), {
+      if (isTRUE(.upsert_presence())) {
+        presence_refresh(presence_refresh() + 1L)
+      }
+    }, ignoreNULL = TRUE)
 
     # Label schema for this project (re-fetches on labels_refresh)
     project_labels <- reactive({
@@ -374,6 +485,21 @@ mod_review_server <- function(id, project_id, session_rv,
       group_instances(list())
     }, ignoreNULL = TRUE)
 
+    session$onSessionEnded(function() {
+      pid <- tryCatch(shiny::isolate(project_id()), error = function(e) NULL)
+      uid <- tryCatch(session_rv$user_id, error = function(e) NULL)
+      tok <- tryCatch(session_rv$token, error = function(e) NULL)
+      if (is.null(pid) || is.null(uid) || is.null(tok)) return(invisible(NULL))
+      tryCatch({
+        sb_delete_where("reviewer_presence",
+                        filters = list(project_id = pid, user_id = uid),
+                        token = tok)
+      }, error = function(e) {
+        message("[reviewer_presence] cleanup failed: ", e$message)
+      })
+      invisible(NULL)
+    })
+
     # Auto-select first unreviewed article when articles first load
     observeEvent(all_articles(), {
       if (!is.null(current_article_id())) return()
@@ -439,6 +565,57 @@ mod_review_server <- function(id, project_id, session_rv,
     # --------------------------------------------------------
     # Progress badge
     # --------------------------------------------------------
+    output$presence_banner <- renderUI({
+      if (!isTRUE(presence_enabled())) return(NULL)
+      rows <- active_other_reviewers()
+      if (!is.data.frame(rows) || nrow(rows) == 0) return(NULL)
+
+      aid <- current_article_id()
+      same_article <- !is.null(aid) & rows$current_article_id == aid
+      n_same <- sum(same_article, na.rm = TRUE)
+
+      reviewer_lines <- lapply(seq_len(nrow(rows)), function(i) {
+        who <- as.character(rows$reviewer_label[i] %||% "Reviewer")
+        if (is.na(who) || nchar(trimws(who)) == 0) who <- "Reviewer"
+
+        other_aid <- as.character(rows$current_article_id[i] %||% "")
+        if (is.na(other_aid)) other_aid <- ""
+
+        loc <- "an article"
+        if (nchar(other_aid) > 0) {
+          loc <- paste0("article ", substr(other_aid, 1, 8), "...")
+        }
+
+        status_badge <- if (!is.null(aid) && nchar(other_aid) > 0 && identical(other_aid, as.character(aid))) {
+          span(class = "badge bg-danger-subtle text-danger border border-danger-subtle ms-2", "Same article")
+        } else {
+          span(class = "badge bg-info-subtle text-info border border-info-subtle ms-2", "Different article")
+        }
+
+        div(class = "small mb-1",
+            strong(who),
+            span(" is viewing "),
+            span(class = "text-muted", loc),
+            status_badge)
+      })
+
+      summary_text <- if (n_same > 0) {
+        sprintf("Potential conflict: %d active reviewer(s) are viewing this same article.", n_same)
+      } else {
+        sprintf("%d active reviewer(s) are currently viewing other articles.", nrow(rows))
+      }
+
+      div(
+        class = if (n_same > 0) "alert alert-warning mb-3" else "alert alert-info mb-3",
+        div(class = "d-flex align-items-center gap-2 mb-2",
+          icon(if (n_same > 0) "exclamation-triangle" else "users"),
+            strong(summary_text)),
+        tagList(reviewer_lines),
+        div(class = "small text-muted mt-2",
+            sprintf("Active within the last %d seconds.", presence_active_window_secs))
+      )
+    })
+
     output$progress_badge <- renderUI({
       df <- all_articles()
       if (!is.data.frame(df) || nrow(df) == 0) return(NULL)
@@ -460,13 +637,20 @@ mod_review_server <- function(id, project_id, session_rv,
       df  <- filtered_articles()
       cid <- current_article_id()
 
+      # Collect article IDs currently open by other reviewers
+      peers     <- active_other_reviewers()
+      peer_aids <- if (is.data.frame(peers) && nrow(peers) > 0 && "current_article_id" %in% names(peers))
+                     peers$current_article_id[!is.na(peers$current_article_id)]
+                   else character(0)
+
       if (!is.data.frame(df) || nrow(df) == 0)
         return(p(class = "text-muted fst-italic p-3", "No articles found."))
 
       lapply(seq_len(nrow(df)), function(i) {
-        aid    <- df$article_id[i]
-        status <- df$review_status[i] %||% "unreviewed"
-        active <- if (!is.null(cid)) identical(cid, aid) else FALSE
+        aid         <- df$article_id[i]
+        status      <- df$review_status[i] %||% "unreviewed"
+        active      <- if (!is.null(cid)) identical(cid, aid) else FALSE
+        peer_active <- isTRUE(aid %in% peer_aids)
 
         status_icon <- switch(status,
           "reviewed" = icon("check-circle", class = "text-success me-1"),
@@ -485,19 +669,42 @@ mod_review_server <- function(id, project_id, session_rv,
         yr      <- if (!is.na(df$year[i])) df$year[i] else ""
         sub_txt <- paste0("ID: ", num_lbl, " · ", auth, " · ", yr)
 
+        # Peer reviewer label(s) for tooltip / sub-text
+        peer_names <- if (peer_active && "reviewer_label" %in% names(peers)) {
+          matched <- peers$reviewer_label[!is.na(peers$current_article_id) &
+                                            peers$current_article_id == aid]
+          matched <- matched[!is.na(matched)]
+          if (length(matched) > 0) paste(matched, collapse = ", ") else NULL
+        } else NULL
+
+        row_class <- paste(
+          "px-2 py-2 border-bottom review-list-item",
+          if (active)                      "bg-primary text-white"
+          else if (peer_active)            "article-peer-active"
+          else                             ""
+        )
+
         div(
-          class   = paste("px-2 py-2 border-bottom review-list-item",
-                          if (active) "bg-primary text-white" else ""),
+          class   = row_class,
           style   = "cursor: pointer;",
           onclick = sprintf('Shiny.setInputValue("%s", "%s", {priority:"event"});',
                             ns("select_article"), aid),
           div(class = "d-flex align-items-start",
             div(class = "mt-1 me-1 flex-shrink-0", status_icon),
-            div(
-              tags$div(class = paste("fw-semibold",
-                                      if (active) "" else ""),
-                       style = "font-size:0.85em; line-height:1.2;",
-                       short),
+            div(class = "flex-grow-1 min-width-0",
+              div(class = "d-flex align-items-center gap-1",
+                tags$div(class = "fw-semibold",
+                         style = "font-size:0.85em; line-height:1.2;",
+                         short),
+                if (peer_active)
+                  tags$span(
+                    class = if (active) "badge bg-warning text-dark ms-1"
+                            else        "badge bg-warning text-dark ms-1",
+                    style = "font-size:0.65em; white-space:nowrap;",
+                    title = if (!is.null(peer_names)) paste("Being reviewed by:", peer_names) else "Being reviewed",
+                    icon("user", style = "font-size:0.8em;"), " Active"
+                  )
+              ),
               tags$div(class = paste("small",
                                       if (active) "text-white-50" else "text-muted"),
                        sub_txt)

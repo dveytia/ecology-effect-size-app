@@ -84,8 +84,9 @@ These SQL scripts create all the tables, policies, and triggers the app needs.
 | 7 | `sql/07_gdrive_columns.sql` | Google Drive and article numbering columns |
 | 8 | `sql/08_effect_type_column.sql` | Effect type tracking column |
 | 9 | `sql/09_effect_sizes_delete_policy.sql` | Allow effect size row deletion |
-| 10 | `sql/11_sequence_grants.sql` | Permission for auto-numbering |
-| 11 | `sql/12_fix_projects_rls.sql` | Fix project creation permissions |
+| 10 | `sql/10_sequence_grants.sql` | Permission for auto-numbering |
+| 11 | `sql/11_fix_projects_rls.sql` | Fix project creation permissions |
+| 12 | `sql/12_reviewer_presence.sql` | Live reviewer presence in the Review tab |
 
 Each script should print a green "Success" message. If any script fails, check for typos — scripts must be run in order because later ones depend on earlier ones.
 
@@ -678,7 +679,7 @@ The **Audit Log** tab shows a timestamped record of every save, skip, and edit. 
 | Google Drive sync shows 0 files | Make sure the folder is shared as "Anyone with the link can view" and that `GOOGLE_API_KEY` is set in `.Renviron` |
 | PDFs not linking to articles | PDF filenames must be `[article_num].pdf` (e.g. `42.pdf`). Check that the number matches the `article_num` in your articles table |
 | Invite says "No account found" | The collaborator needs to register their own account first using the app's Register tab |
-| Upload says complete but articles don't appear | Run `sql/11_sequence_grants.sql` in Supabase SQL Editor if you haven't already |
+| Upload says complete but articles don't appear | Run `sql/10_sequence_grants.sql` in Supabase SQL Editor if you haven't already |
 
 ---
 

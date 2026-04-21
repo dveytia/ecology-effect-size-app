@@ -26,6 +26,16 @@ body {
   margin-bottom: 1rem;
 }
 
+/* Article list: peer reviewer active highlight */
+.article-peer-active {
+  background-color: #fff8e1;
+  border-left: 3px solid #f9a825 !important;
+}
+
+.article-peer-active:hover {
+  background-color: #fff3cd;
+}
+
 .article-header h5 {
   margin-bottom: 0.25rem;
   font-weight: 600;
