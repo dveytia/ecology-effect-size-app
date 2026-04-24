@@ -78,7 +78,9 @@ source("R/utils.R")
 source("R/supabase.R")
 readRenviron(".Renviron")
 
-# MY_TOKEN must be your SUPABASE_SERVICE_KEY (a long JWT starting with eyJ...).
+# MY_TOKEN must be your SUPABASE_SERVICE_KEY.
+# Depending on your Supabase project it may be a legacy JWT-like key
+# starting with eyJ... or a newer sb_secret_... key.
 # It is NOT a UUID. Read it directly from .Renviron:
 MY_TOKEN <- Sys.getenv("SUPABASE_SERVICE_KEY")
 stopifnot(nchar(MY_TOKEN) > 50)   # quick sanity check

@@ -58,9 +58,9 @@ Supabase is a free cloud database. Think of it as the filing cabinet where all y
 1. In Supabase, click the cog icon **⚙ Project Settings** (bottom-left sidebar)
 2. Click **API** in the left sidebar
 3. You will see:
-   - **Project URL** — looks like `https://abcdefghij.supabase.co`
-   - **anon public** key — a long string starting with `eyJ...` (safe for client code)
-   - **service_role** key — another long string (keep this secret; use only in trusted server code)
+  - **Project URL** — looks like `https://abcdefghij.supabase.co`
+  - **public / anon** key — either a legacy JWT-like key or a newer `sb_publishable_...` key (safe for client code)
+  - **service** key — either a legacy JWT-like key or a newer `sb_secret_...` key (keep this secret; use only in trusted server code)
 4. Leave this page open — you'll need these values in Step 4
 
 ---
@@ -91,7 +91,7 @@ Your API keys must be stored in a file called `.Renviron`. This file is **never 
 ```
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_KEY=your-anon-public-key
-SUPABASE_SERVICE_KEY=your-service-role-key
+SUPABASE_SERVICE_KEY=your-service-key
 ```
 
 4. Save the file

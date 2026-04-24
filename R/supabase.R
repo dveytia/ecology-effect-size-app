@@ -25,6 +25,14 @@
   key
 }
 
+.sb_is_jwt <- function(key) {
+  grepl("^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$", key)
+}
+
+.sb_is_secret_key <- function(key) {
+  grepl("^sb_secret_[A-Za-z0-9_]+$", key)
+}
+
 # Build base request to the PostgREST REST API endpoint.
 # If `token` is provided (user JWT), it is used for RLS.
 # Otherwise the anon key is used.
@@ -32,8 +40,19 @@
 # .sb_parse() handles error detection and extracts the Supabase
 # error body (message, hint, code) for informative error messages.
 .sb_base_req <- function(path, token = NULL, apikey = NULL) {
-  key <- if (!is.null(token)) token else .sb_anon_key()
-  api_key <- if (!is.null(apikey)) apikey else .sb_anon_key()
+  key <- if (!is.null(token)) trimws(token) else .sb_anon_key()
+  configured_anon <- trimws(.sb_anon_key())
+  configured_service <- trimws(Sys.getenv("SUPABASE_SERVICE_KEY"))
+  api_key <- if (!is.null(apikey)) {
+    trimws(apikey)
+  } else if (!is.null(token) && (
+      identical(key, configured_anon) ||
+      (nchar(configured_service) > 0 && identical(key, configured_service))
+    )) {
+    key
+  } else {
+    configured_anon
+  }
   httr2::request(paste0(.sb_url(), path)) |>
     httr2::req_headers(
       "apikey"        = api_key,
@@ -237,9 +256,13 @@ sb_rpc <- function(fn_name, params = list(), token = NULL) {
   if (nchar(key) == 0) {
     stop("SUPABASE_SERVICE_KEY is not set in .Renviron")
   }
-  # Supabase JWTs are three dot-separated base64url segments.
-  if (!grepl("^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$", key)) {
-    stop("SUPABASE_SERVICE_KEY is not a valid JWT (expected 3 dot-separated parts).")
+  if (!.sb_is_jwt(key) && !.sb_is_secret_key(key)) {
+    stop(
+      paste(
+        "SUPABASE_SERVICE_KEY is not a supported Supabase service key",
+        "(expected a legacy JWT eyJ... key or a newer sb_secret_... key)."
+      )
+    )
   }
   key
 }

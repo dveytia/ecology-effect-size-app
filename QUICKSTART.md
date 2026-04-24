@@ -41,9 +41,25 @@ Supabase is a free cloud database and authentication service. It stores all your
 |-------|-----------------|------------|
 | **Project URL** | Top of the API page | `https://abcdefghij.supabase.co` |
 | **anon public key** | Under "Project API keys" | `eyJhbGciO…` (long string) |
-| **service_role key** | Under "Project API keys" (click **Reveal**) | `eyJhbGciO…` (another long string) |
+| **service key** | Under "Project API keys" or API key settings | `eyJhbGciO…` (legacy JWT) or `sb_secret_…` (new format) |
 
-> Keep the service_role key private — it has full database access.
+> Keep the service key private — it has full database access.
+
+### If you specifically want the legacy JWT key pair
+
+Supabase now shows two key styles:
+
+- **New keys:** `sb_publishable_...` and `sb_secret_...`
+- **Legacy JWT keys:** `anon` and `service_role` (long `eyJ...` strings)
+
+This app supports both. Most users can use the newer key format. If you specifically want the legacy JWT pair:
+
+1. In Supabase, go to **Project Settings → API Keys**.
+2. Open the **Legacy anon, service_role API keys** tab.
+3. Copy the **anon_public** key for `SUPABASE_KEY`.
+4. Copy the **service_role** key for `SUPABASE_SERVICE_KEY`.
+
+Use the legacy keys if you need JWT-compatible behavior for older tooling or scripts. Otherwise, the newer publishable/secret keys are the default Supabase recommendation.
 
 ### Disable email confirmation (recommended)
 
@@ -200,7 +216,7 @@ The `.Renviron` file stores your private credentials. It is never uploaded to Gi
 ```
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_KEY=your-anon-public-key
-SUPABASE_SERVICE_KEY=your-service-role-key
+SUPABASE_SERVICE_KEY=your-service-key
 ```
 
 4. Save the file.
@@ -305,9 +321,11 @@ Use this path if you want the app and package environment fully containerised.
 ```
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_KEY=your-anon-public-key
-SUPABASE_SERVICE_KEY=your-service-role-key
+SUPABASE_SERVICE_KEY=your-service-key
 APP_IMAGE_TAG=dev-local
 ```
+
+If you prefer the legacy JWT pair here, use the **anon** key for `SUPABASE_KEY` and the **service_role** key for `SUPABASE_SERVICE_KEY` from the **Legacy API Keys** tab in Supabase.
 
 3. *(Optional)* Set `GOOGLE_API_KEY` in `.env` for Drive sync.
 4. Build and start the container:
